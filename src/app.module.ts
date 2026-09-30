@@ -6,12 +6,16 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import {UserModule} from './modules/users/user.module';
 import { EmailModule } from './email/email.module';
+import { AuthModule } from './auth/auth-module';
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
     EmailModule,
+    AuthModule,
+    UserModule,
+    
 
     TypeOrmModule.forRoot({
       type: 'postgres',
@@ -23,7 +27,7 @@ import { EmailModule } from './email/email.module';
       autoLoadEntities: true,
       synchronize: true,
     }),
-    UserModule,
+    
   ],
 
   controllers: [AppController],

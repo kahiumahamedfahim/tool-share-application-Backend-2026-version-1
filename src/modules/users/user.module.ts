@@ -1,22 +1,34 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { User } from './entities/user.entity';
-import { EmailVerification } from './entities/email-verification.entity';
-import { UserDocument } from './entities/user-document.entity';
-import { RiderProfile } from './entities/rider-profile.entity';
-import { RiderDocument } from './entities/rider-document.entity';
+import { User } from './entity/user-entity';
+import { UserDocument } from './entity/user-document.entity';
+import { EmailVerification } from './entity/email-verification.entity';
 
+import { UserController } from './user-controller';
+import { UserService } from './user-service';
+
+import { EmailModule } from 'src/email/email.module';
+import { AuthModule } from 'src/auth/auth-module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
-     User,
-  UserDocument,
-  EmailVerification,
-  RiderProfile,
-  RiderDocument,
+      User,
+      UserDocument,
+      EmailVerification,
     ]),
+
+    EmailModule,
+    AuthModule
+  ],
+
+  controllers: [
+    UserController,
+  ],
+
+  providers: [
+    UserService,
   ],
 })
 export class UserModule {}
