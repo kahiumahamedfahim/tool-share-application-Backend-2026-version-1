@@ -19,7 +19,11 @@ import { ApproveUserDocumentDto } from "./dto/approve-user-document.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { ExceptionsHandler } from "@nestjs/core/exceptions/exceptions-handler";
 import { ResendVerificationCodeDto } from "./dto/resend-verification-code.dto";
-
+import { error } from "console";
+import { PaginationDto } from "../pagination/pagination-dto";
+import { InternalServerErrorException } from "@nestjs/common";
+import { RejectUserDocumentDto } from "./dto/reject-user-document.dto";
+import { CreateRiderDto } from "./dto/create-rider-dto";
 @Injectable()
 export class UserService 
 {
@@ -111,7 +115,7 @@ private async createUser(
             phone: data.phone,
             password: hasedPassword,
             role,
-            status:UserStatus.ACTIVE,
+            status:UserStatus.PENDING,
 
         }
     );
@@ -155,7 +159,7 @@ private async createEmailVerification(
 ): Promise<EmailVerification>
 {
     const verificationCode = this.generateVerificationCode();
-    const expiredAt= new Date(Date.now() +10 *60 *1000);
+    const expiredAt= new Date(Date.now() +2 *60 *1000);
     const emailVerification=manager.create(EmailVerification, 
         {
             userId,
@@ -179,12 +183,17 @@ private async validateUserRegistration(
             where : 
             {
                 email:data.email,
+                
             }
         }
     );
     if(existingEmail)
     {
-        throw new ConflictException("Email is already registred!");
+        if(existingEmail.emailVerificationStatus==true)
+        {
+            throw new ConflictException("Email is already registred!");
+        }
+        return existingEmail;
     }
     const existingUserByPhone= await manager.findOne(User,
         {
@@ -213,72 +222,170 @@ private async validateUserRegistration(
 }
 
 async createAdmin(
-    dto : CreateAdminDto,
-    files : 
+    dto: CreateAdminDto,
+    files:
     {
-        profileImage?:Express.Multer.File[];
+        profileImage?: Express.Multer.File[];
         nidFrontImage?: Express.Multer.File[];
-        nidBackImage ?: Express.Multer.File[];
+        nidBackImage?: Express.Multer.File[];
     },
-):Promise<any>
+): Promise<any>
 {
     const querryRunner = this.dataSource.createQueryRunner();
+
     await querryRunner.connect();
     await querryRunner.startTransaction();
 
-    try 
+    try
     {
-        const manager= querryRunner.manager;
-        const userData: CreateUserData=
+        const manager = querryRunner.manager;
+
+        const userData: CreateUserData =
         {
             firstName: dto.firstName,
-            lastName:dto.lastName,
-            email : dto.email,
-            phone:dto.phone,
-            password:dto.password,
+            lastName: dto.lastName,
+            email: dto.email,
+            phone: dto.phone,
+            password: dto.password,
         };
-        await this.validateUserRegistration(manager,
-            userData,
-            dto.nidNumber,
-        )
-        const user=await this.createUser(manager,userData,UserRole.ADMIN);
-        const documentData:CreateUserDocumentData=
+
+        const existingUser =
+            await this.validateUserRegistration(
+                manager,
+                userData,
+                dto.nidNumber,
+            );
+
+        let user: User;
+
+        if(existingUser)
         {
-            nidNumber : dto.nidNumber,
+            existingUser.firstName = userData.firstName;
+            existingUser.lastName = userData.lastName;
+            existingUser.phone = userData.phone;
+            existingUser.password = await this.hasedPassword(
+                userData.password
+            );
+            existingUser.role = UserRole.ADMIN;
+
+            user = await manager.save(
+                User,
+                existingUser
+            );
+        }
+        else
+        {
+            user = await this.createUser(
+                manager,
+                userData,
+                UserRole.ADMIN
+            );
+        }
+
+        const documentData: CreateUserDocumentData =
+        {
+            nidNumber: dto.nidNumber,
         };
-        const userDocument= await this.createUserDocument(manager,
-            user.userId,
-            documentData,
-            files
-        );
-        const emailVerification = await this.createEmailVerification(manager, 
-            user.userId,
-            user.email
-        );
+
+        let userDocument: UserDocument;
+
+        if(existingUser)
+        {
+            const existingUserDocument =
+                await manager.findOne(
+                    UserDocument,
+                    {
+                        where:
+                        {
+                            userId: user.userId,
+                        }
+                    }
+                );
+
+            if(!existingUserDocument)
+            {
+                throw new NotFoundException(
+                    'User document not found'
+                );
+            }
+
+            existingUserDocument.nidNumber =
+                dto.nidNumber;
+
+            if(files.profileImage?.[0])
+            {
+                existingUserDocument.profileImage =
+                    files.profileImage[0].filename;
+            }
+
+            if(files.nidFrontImage?.[0])
+            {
+                existingUserDocument.nidFrontImage =
+                    files.nidFrontImage[0].filename;
+            }
+
+            if(files.nidBackImage?.[0])
+            {
+                existingUserDocument.nidBackImage =
+                    files.nidBackImage[0].filename;
+            }
+
+            existingUserDocument.verificationStatus =
+                DocumentVerificationStatus.PENDING;
+
+            existingUserDocument.rejectionReason = null;
+
+            existingUserDocument.documentVerifiedBy = null;
+
+            existingUserDocument.documentVerifiedAt = null;
+
+            userDocument = await manager.save(
+                UserDocument,
+                existingUserDocument
+            );
+        }
+        else
+        {
+            userDocument =
+                await this.createUserDocument(
+                    manager,
+                    user.userId,
+                    documentData,
+                    files
+                );
+        }
+
+        const emailVerification =
+            await this.createEmailVerification(
+                manager,
+                user.userId,
+                user.email
+            );
+
         await querryRunner.commitTransaction();
-        await this.emailService.sendEmailVerification(user.email,
+
+        await this.emailService.sendEmailVerification(
+            user.email,
             emailVerification.verificationCode
         );
+
         return {
-  message: 'Admin registered successfully. Please verify your email.',
-  userId: user.userId,
-};
-
-
-
-
+            message:
+                'Admin registered successfully. Please verify your email.',
+            userId: user.userId,
+        };
     }
     catch(error)
     {
         await querryRunner.rollbackTransaction();
+
         throw error;
     }
     finally
     {
-            await querryRunner.release();
+        await querryRunner.release();
     }
 }
-
 async getPendingDocuments() : Promise<UserDocument[]>
 {
     const documents = await this.userDocumentRepsitory.find(
@@ -300,6 +407,7 @@ async getUserDocumentById(userId : string ) : Promise<UserDocument>
             where : 
             {
                 userId,
+              
             }
         }
     );
@@ -392,6 +500,7 @@ async verifyEmail(
     return {
       success: true,
       message: 'Email verified successfully',
+      role : user.role,
     };
 
   } catch (error) {
@@ -467,6 +576,122 @@ userDocument.documentVerifiedAt= new Date();
     {
          await querryRunner.release();
     }
+}
+async rejectUserDocument(
+  dto: RejectUserDocumentDto,
+  verifiedBy: string,
+): Promise<{
+  message: string;
+  userId: string;
+}> {
+  const queryRunner = this.dataSource.createQueryRunner();
+
+  await queryRunner.connect();
+  await queryRunner.startTransaction();
+
+  let user: User;
+
+  try {
+    const manager = queryRunner.manager;
+
+    // ---------------------------------------------
+    // Find User Document
+    // ---------------------------------------------
+
+    const userDocument = await manager.findOne(UserDocument, {
+      where: {
+        userId: dto.userId,
+      },
+    });
+
+    if (!userDocument) {
+      throw new NotFoundException(
+        'User document not found',
+      );
+    }
+
+    // ---------------------------------------------
+    // Check Document Status
+    // ---------------------------------------------
+
+    if (
+      userDocument.verificationStatus !==
+      DocumentVerificationStatus.PENDING
+    ) {
+      throw new ConflictException(
+        'User document has already been processed',
+      );
+    }
+
+    // ---------------------------------------------
+    // Update Rejection Information
+    // ---------------------------------------------
+
+    userDocument.verificationStatus =
+      DocumentVerificationStatus.REJECTED;
+
+    userDocument.rejectionReason =
+      dto.rejectionReason;
+
+    userDocument.documentVerifiedBy =
+      verifiedBy;
+
+    userDocument.documentVerifiedAt =
+      new Date();
+
+    await manager.save(
+      UserDocument,
+      userDocument,
+    );
+
+    // ---------------------------------------------
+    // Find User
+    // ---------------------------------------------
+
+    const foundUser = await manager.findOne(User, {
+      where: {
+        userId: dto.userId,
+      },
+    });
+
+    if (!foundUser) {
+      throw new NotFoundException(
+        'User not found for rejected document',
+      );
+    }
+
+    user = foundUser;
+
+    // ---------------------------------------------
+    // Commit Transaction
+    // ---------------------------------------------
+
+    await queryRunner.commitTransaction();
+  } catch (error) {
+    await queryRunner.rollbackTransaction();
+    throw error;
+  } finally {
+    await queryRunner.release();
+  }
+
+  // ---------------------------------------------
+  // Send Rejection Email
+  // ---------------------------------------------
+
+  await this.emailService.documentRejection(
+    user.email,
+    user.firstName,
+    dto.rejectionReason,
+  );
+
+  // ---------------------------------------------
+  // Response
+  // ---------------------------------------------
+
+  return {
+    message: 'Document rejected successfully!',
+    userId: user.userId,
+  };
 }
 async resendVerificationCode(
   dto: ResendVerificationCodeDto,
@@ -545,6 +770,708 @@ async resendVerificationCode(
   }
 }
 
+async allAdminPendingDocuments(
+  paginationDto: PaginationDto,
+): Promise<{
+  data: User[];
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}> {
+  try {
+    const { page, limit } = paginationDto;
 
+    const skip = (page - 1) * limit;
+
+    const [usersWithPendingDocuments, total] =
+      await this.userRepository.findAndCount({
+        where: {
+          emailVerificationStatus: true,
+          role: UserRole.ADMIN,
+          userDocument: {
+            verificationStatus: DocumentVerificationStatus.PENDING,
+          },
+        },
+        relations: {
+          userDocument: true,
+        },
+        order: {
+          createdAt: 'DESC',
+        },
+        skip,
+        take: limit,
+      });
+
+    const totalPages = Math.ceil(total / limit);
+
+    return {
+      data: usersWithPendingDocuments,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    };
+  } catch (error) {
+    console.error(
+      'Error fetching pending documents:',
+      error,
+    );
+
+    throw new InternalServerErrorException(
+      'Failed to fetch pending documents',
+    );
+  }
+}
+
+async createModerator(
+    dto: CreateAdminDto,
+    files:
+    {
+        profileImage?: Express.Multer.File[];
+        nidFrontImage?: Express.Multer.File[];
+        nidBackImage?: Express.Multer.File[];
+    },
+): Promise<any>
+{
+    const querryRunner = this.dataSource.createQueryRunner();
+
+    await querryRunner.connect();
+    await querryRunner.startTransaction();
+
+    try
+    {
+        const manager = querryRunner.manager;
+
+        const userData: CreateUserData =
+        {
+            firstName: dto.firstName,
+            lastName: dto.lastName,
+            email: dto.email,
+            phone: dto.phone,
+            password: dto.password,
+        };
+
+        const existingUser =
+            await this.validateUserRegistration(
+                manager,
+                userData,
+                dto.nidNumber,
+            );
+
+        let user: User;
+
+        if(existingUser)
+        {
+            existingUser.firstName = userData.firstName;
+            existingUser.lastName = userData.lastName;
+            existingUser.phone = userData.phone;
+            existingUser.password = await this.hasedPassword(
+                userData.password
+            );
+            existingUser.role = UserRole.MODERATOR;
+
+            user = await manager.save(
+                User,
+                existingUser
+            );
+        }
+        else
+        {
+            user = await this.createUser(
+                manager,
+                userData,
+                UserRole.MODERATOR
+            );
+        }
+
+        const documentData: CreateUserDocumentData =
+        {
+            nidNumber: dto.nidNumber,
+        };
+
+        let userDocument: UserDocument;
+
+        if(existingUser)
+        {
+            const existingUserDocument =
+                await manager.findOne(
+                    UserDocument,
+                    {
+                        where:
+                        {
+                            userId: user.userId,
+                        }
+                    }
+                );
+
+            if(!existingUserDocument)
+            {
+                throw new NotFoundException(
+                    'User document not found'
+                );
+            }
+
+            existingUserDocument.nidNumber =
+                dto.nidNumber;
+
+            if(files.profileImage?.[0])
+            {
+                existingUserDocument.profileImage =
+                    files.profileImage[0].filename;
+            }
+
+            if(files.nidFrontImage?.[0])
+            {
+                existingUserDocument.nidFrontImage =
+                    files.nidFrontImage[0].filename;
+            }
+
+            if(files.nidBackImage?.[0])
+            {
+                existingUserDocument.nidBackImage =
+                    files.nidBackImage[0].filename;
+            }
+
+            existingUserDocument.verificationStatus =
+                DocumentVerificationStatus.PENDING;
+
+            existingUserDocument.rejectionReason = null;
+
+            existingUserDocument.documentVerifiedBy = null;
+
+            existingUserDocument.documentVerifiedAt = null;
+
+            userDocument = await manager.save(
+                UserDocument,
+                existingUserDocument
+            );
+        }
+        else
+        {
+            userDocument =
+                await this.createUserDocument(
+                    manager,
+                    user.userId,
+                    documentData,
+                    files
+                );
+        }
+
+        const emailVerification =
+            await this.createEmailVerification(
+                manager,
+                user.userId,
+                user.email
+            );
+
+        await querryRunner.commitTransaction();
+
+        await this.emailService.sendEmailVerification(
+            user.email,
+            emailVerification.verificationCode
+        );
+
+        return {
+            message:
+                'Moderator registered successfully. Please verify your email.',
+            userId: user.userId,
+        };
+    }
+    catch(error)
+    {
+        await querryRunner.rollbackTransaction();
+
+        throw error;
+    }
+    finally
+    {
+        await querryRunner.release();
+    }
+}
+async allModeratorPendingDocuments(
+    paginationDto: PaginationDto,
+): Promise<{
+    data: User[];
+    meta: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+    };
+}>
+{
+    try
+    {
+        const { page, limit } = paginationDto;
+
+        const skip = (page - 1) * limit;
+
+        const [usersWithPendingDocuments, total] =
+            await this.userRepository.findAndCount({
+                where:
+                {
+                    emailVerificationStatus: true,
+
+                    role: UserRole.MODERATOR,
+
+                    userDocument:
+                    {
+                        verificationStatus:
+                            DocumentVerificationStatus.PENDING,
+                    },
+                },
+
+                relations:
+                {
+                    userDocument: true,
+                },
+
+                order:
+                {
+                    createdAt: 'DESC',
+                },
+
+                skip,
+
+                take: limit,
+            });
+
+        const totalPages = Math.ceil(
+            total / limit
+        );
+
+        return {
+            data: usersWithPendingDocuments,
+
+            meta:
+            {
+                page,
+
+                limit,
+
+                total,
+
+                totalPages,
+            },
+        };
+    }
+    catch(error)
+    {
+        console.error(
+            'Error fetching moderator pending documents:',
+            error,
+        );
+
+        throw new InternalServerErrorException(
+            'Failed to fetch moderator pending documents',
+        );
+    }
+}
+private async validateRiderRegistration(manager: EntityManager,
+  drivingLicenseNumber: string,
+  vehicleNumber : string
+): Promise<any> 
+{
+  const existingUserByDrivingLicense = await manager.findOne(UserDocument,
+    {
+      where :
+      {
+        drivingLicenseNumber,
+      }
+    }
+    
+  )
+  if(existingUserByDrivingLicense)
+  {
+    throw new ConflictException('Driving license number is already registered!');
+  }
+  const existingVehicle=
+  await manager.findOne(UserDocument,
+    {
+      where:
+      {
+        vehicleNumber
+      }
+    }
+  );
+  if(existingVehicle)
+  {
+    throw new ConflictException('Vehicle number is already registered!');
+  }
+}
+private async createRiderDocument(
+    manager: EntityManager,
+    userId: string,
+    data: CreateUserDocumentData,
+    files:
+    {
+        profileImage?: Express.Multer.File[];
+        nidFrontImage?: Express.Multer.File[];
+        nidBackImage?: Express.Multer.File[];
+        drivingLicenseFrontImage?: Express.Multer.File[];
+        drivingLicenseBackImage?: Express.Multer.File[];
+        vehicleImage?: Express.Multer.File[];
+    },
+): Promise<UserDocument>
+{
+    const userDocument =
+        manager.create(
+            UserDocument,
+            {
+                userId,
+
+                nidNumber:
+                    data.nidNumber,
+
+                drivingLicenseNumber:
+                    data.drivingLicenseNumber,
+
+                vehicleType:
+                    data.vehicleType,
+
+                vehicleNumber:
+                    data.vehicleNumber,
+
+                profileImage:
+                    files.profileImage?.[0]?.filename,
+
+                nidFrontImage:
+                    files.nidFrontImage?.[0]?.filename,
+
+                nidBackImage:
+                    files.nidBackImage?.[0]?.filename,
+
+                drivingLicenseFrontImage:
+                    files.drivingLicenseFrontImage?.[0]?.filename,
+
+                drivingLicenseBackImage:
+                    files.drivingLicenseBackImage?.[0]?.filename,
+
+                vehicleImage:
+                    files.vehicleImage?.[0]?.filename,
+
+                verificationStatus:
+                    DocumentVerificationStatus.PENDING,
+            },
+        );
+
+    return await manager.save(
+        UserDocument,
+        userDocument,
+    );
+}
+async createRider(
+    dto: CreateRiderDto,
+    files:
+    {
+        profileImage?: Express.Multer.File[];
+        nidFrontImage?: Express.Multer.File[];
+        nidBackImage?: Express.Multer.File[];
+        drivingLicenseFrontImage?: Express.Multer.File[];
+        drivingLicenseBackImage?: Express.Multer.File[];
+        vehicleImage?: Express.Multer.File[];
+    },
+): Promise<any>
+{
+    const querryRunner =
+        this.dataSource.createQueryRunner();
+
+    await querryRunner.connect();
+
+    await querryRunner.startTransaction();
+
+    try
+    {
+        const manager =
+            querryRunner.manager;
+
+        const userData: CreateUserData =
+        {
+            firstName: dto.firstName,
+            lastName: dto.lastName,
+            email: dto.email,
+            phone: dto.phone,
+            password: dto.password,
+        };
+
+        const existingUser =
+            await this.validateUserRegistration(
+                manager,
+                userData,
+                dto.nidNumber,
+            );
+
+        await this.validateRiderRegistration(
+            manager,
+            dto.drivingLicenseNumber,
+            dto.vehicleNumber,
+          
+        );
+
+        let user: User;
+
+        if(existingUser)
+        {
+            existingUser.firstName =
+                userData.firstName;
+
+            existingUser.lastName =
+                userData.lastName;
+
+            existingUser.phone =
+                userData.phone;
+
+            existingUser.password =
+                await this.hasedPassword(
+                    userData.password
+                );
+
+            existingUser.role =
+                UserRole.RIDER;
+
+            user = await manager.save(
+                User,
+                existingUser
+            );
+        }
+        else
+        {
+            user = await this.createUser(
+                manager,
+                userData,
+                UserRole.RIDER
+            );
+        }
+
+        const documentData: CreateUserDocumentData =
+        {
+            nidNumber: dto.nidNumber,
+
+            drivingLicenseNumber:
+                dto.drivingLicenseNumber,
+
+            vehicleType:
+                dto.vehicleType,
+
+            vehicleNumber:
+                dto.vehicleNumber,
+        };
+
+        let userDocument: UserDocument;
+
+        if(existingUser)
+        {
+            const existingUserDocument =
+                await manager.findOne(
+                    UserDocument,
+                    {
+                        where:
+                        {
+                            userId: user.userId,
+                        }
+                    }
+                );
+
+            if(!existingUserDocument)
+            {
+                throw new NotFoundException(
+                    'User document not found'
+                );
+            }
+
+            existingUserDocument.nidNumber =
+                dto.nidNumber;
+
+            existingUserDocument.drivingLicenseNumber =
+                dto.drivingLicenseNumber;
+
+            existingUserDocument.vehicleType =
+                dto.vehicleType;
+
+            existingUserDocument.vehicleNumber =
+                dto.vehicleNumber;
+
+            if(files.profileImage?.[0])
+            {
+                existingUserDocument.profileImage =
+                    files.profileImage[0].filename;
+            }
+
+            if(files.nidFrontImage?.[0])
+            {
+                existingUserDocument.nidFrontImage =
+                    files.nidFrontImage[0].filename;
+            }
+
+            if(files.nidBackImage?.[0])
+            {
+                existingUserDocument.nidBackImage =
+                    files.nidBackImage[0].filename;
+            }
+
+            if(files.drivingLicenseFrontImage?.[0])
+            {
+                existingUserDocument.drivingLicenseFrontImage =
+                    files.drivingLicenseFrontImage[0].filename;
+            }
+
+            if(files.drivingLicenseBackImage?.[0])
+            {
+                existingUserDocument.drivingLicenseBackImage =
+                    files.drivingLicenseBackImage[0].filename;
+            }
+
+            if(files.vehicleImage?.[0])
+            {
+                existingUserDocument.vehicleImage =
+                    files.vehicleImage[0].filename;
+            }
+
+            existingUserDocument.verificationStatus =
+                DocumentVerificationStatus.PENDING;
+
+            existingUserDocument.rejectionReason =
+                null;
+
+            existingUserDocument.documentVerifiedBy =
+                null;
+
+            existingUserDocument.documentVerifiedAt =
+                null;
+
+            userDocument = await manager.save(
+                UserDocument,
+                existingUserDocument
+            );
+        }
+        else
+        {
+            userDocument =
+                await this.createRiderDocument(
+                    manager,
+                    user.userId,
+                    documentData,
+                    files
+                );
+        }
+
+        const emailVerification =
+            await this.createEmailVerification(
+                manager,
+                user.userId,
+                user.email
+            );
+
+        await querryRunner.commitTransaction();
+
+        await this.emailService.sendEmailVerification(
+            user.email,
+            emailVerification.verificationCode
+        );
+
+        return {
+            message:
+                'Rider registered successfully. Please verify your email.',
+
+            userId:
+                user.userId,
+        };
+    }
+    catch(error)
+    {
+        await querryRunner.rollbackTransaction();
+
+        throw error;
+    }
+    finally
+    {
+        await querryRunner.release();
+    }
+}
+async allRiderPendingDocuments(
+    paginationDto: PaginationDto,
+): Promise<{
+    data: User[];
+    meta: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+    };
+}>
+{
+    try
+    {
+        const { page, limit } = paginationDto;
+
+        const skip = (page - 1) * limit;
+
+        const [usersWithPendingDocuments, total] =
+            await this.userRepository.findAndCount({
+                where:
+                {
+                    emailVerificationStatus: true,
+
+                    role: UserRole.RIDER,
+
+                    userDocument:
+                    {
+                        verificationStatus:
+                            DocumentVerificationStatus.PENDING,
+                    },
+                },
+
+                relations:
+                {
+                    userDocument: true,
+                },
+
+                order:
+                {
+                    createdAt: 'DESC',
+                },
+
+                skip,
+
+                take: limit,
+            });
+
+        const totalPages = Math.ceil(
+            total / limit
+        );
+
+        return {
+            data: usersWithPendingDocuments,
+
+            meta:
+            {
+                page,
+
+                limit,
+
+                total,
+
+                totalPages,
+            },
+        };
+    }
+    catch(error)
+    {
+        console.error(
+            'Error fetching rider pending documents:',
+            error,
+        );
+
+        throw new InternalServerErrorException(
+            'Failed to fetch rider pending documents',
+        );
+    }
+}
 
 }
+

@@ -18,6 +18,7 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response
   ) {
 
+    console.log("controller hit");
     const result = await this.authService.login(dto);
 
     response.cookie(
@@ -38,4 +39,23 @@ export class AuthController {
       accessToken: result.accessToken,
     };
   }
+
+  @Post('logout')
+async logout(
+    @Res({ passthrough: true }) response: Response
+)
+{
+    response.clearCookie(
+        'access_token',
+        {
+            httpOnly: true,
+            secure: false,
+            sameSite: 'lax',
+        },
+    );
+
+    return {
+        message: 'Logout successful',
+    };
+}
 }

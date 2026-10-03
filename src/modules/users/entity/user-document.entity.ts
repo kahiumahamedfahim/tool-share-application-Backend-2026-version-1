@@ -86,6 +86,13 @@ export class UserDocument {
   })
   vehicleNumber!: string | null;
 
+   @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  vehicleType!: string | null;
+
   @Column({
     type: 'enum',
     enum: DocumentVerificationStatus,

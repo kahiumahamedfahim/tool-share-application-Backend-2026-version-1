@@ -25,6 +25,10 @@ import { Roles } from 'src/auth/roles.decorator';
 import { request } from 'http';
 import { Req } from '@nestjs/common';
 import type  {AuthenticatedRequest} from 'src/auth/authenticated-request'
+import { Query } from '@nestjs/common';
+import { PaginationDto } from '../pagination/pagination-dto';
+import { RejectUserDocumentDto } from './dto/reject-user-document.dto';
+import { CreateRiderDto } from '../users/dto/create-rider-dto';
 
 @Controller('users')
 export class UserController{
@@ -124,7 +128,8 @@ export class UserController{
     return await this.userService.getPendingDocuments();
   }
 
-
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN,UserRole.MODERATOR)
   @Get(':userId/document')
   async getUserDocumentById(
     @Param('userId') userId: string,
@@ -143,6 +148,223 @@ async approveUserDocument(
     request.user.userId,
   );
 }
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN)
+@Get('Admin-Pending-documents')
+  async allAdminPendingDocuments( @Query() paginationDto: PaginationDto,)
+  {
+      return await this.userService.allAdminPendingDocuments(paginationDto);
+  }
+@Post('document/reject')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+async rejectUserDocument(
+  @Body() dto: RejectUserDocumentDto,
+  @Req() request: AuthenticatedRequest,
+) {
+  return await this.userService.rejectUserDocument(
+    dto,
+    request.user.userId,
+  );
+}
+ @Post('moderator/register')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+@UseInterceptors(
+  FileFieldsInterceptor(
+    [
+      {
+        name: 'profileImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidFrontImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidBackImage',
+        maxCount: 1,
+      },
+    ],
+    {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          let folder = './uploads';
 
-  
+          if (file.fieldname === 'profileImage') {
+            folder = './uploads/profile';
+          } else if (file.fieldname === 'nidFrontImage') {
+            folder = './uploads/nid-front';
+          } else if (file.fieldname === 'nidBackImage') {
+            folder = './uploads/nid-back';
+          }
+
+          callback(null, folder);
+        },
+
+        filename: (req, file, callback) => {
+          const uniqueName =
+            `${Date.now()}-${file.originalname}`;
+
+          callback(null, uniqueName);
+        },
+      }),
+    },
+  ),
+)
+  async registerModerator(
+    @Body() dto: CreateAdminDto,
+    @UploadedFiles()
+    files: {
+      profileImage?: Express.Multer.File[];
+      nidFrontImage?: Express.Multer.File[];
+      nidBackImage?: Express.Multer.File[];
+    },
+    
+  ) {
+    if (
+  !files.profileImage?.length ||
+  !files.nidFrontImage?.length ||
+  !files.nidBackImage?.length
+) {
+  throw new BadRequestException(
+    'Profile image, NID front image and NID back image are required',
+  );
+}
+    return await this.userService.createModerator(
+      dto,
+      files,
+    );
+  }
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+@Get('moderator-Pending-documents')
+  async allModeratorPendingDocuments( @Query() paginationDto: PaginationDto,)
+  {
+      return await this.userService.allModeratorPendingDocuments(paginationDto);
+  }
+
+
+  @Post('rider/register')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+@UseInterceptors(
+  FileFieldsInterceptor(
+    [
+      {
+        name: 'profileImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidFrontImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidBackImage',
+        maxCount: 1,
+      },
+      {
+        name: 'drivingLicenseFrontImage',
+        maxCount: 1,
+      },
+      {
+        name: 'drivingLicenseBackImage',
+        maxCount: 1,
+      },
+      {
+        name: 'vehicleImage',
+        maxCount: 1,
+      },
+    ],
+    {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          let folder = './uploads';
+
+          if (file.fieldname === 'profileImage') {
+            folder = './uploads/profile';
+          }
+          else if (file.fieldname === 'nidFrontImage') {
+            folder = './uploads/nid-front';
+          }
+          else if (file.fieldname === 'nidBackImage') {
+            folder = './uploads/nid-back';
+          }
+          else if (
+            file.fieldname === 'drivingLicenseFrontImage'
+          ) {
+            folder =
+              './uploads/driving-license-front';
+          }
+          else if (
+            file.fieldname === 'drivingLicenseBackImage'
+          ) {
+            folder =
+              './uploads/driving-license-back';
+          }
+          else if (file.fieldname === 'vehicleImage') {
+            folder = './uploads/vehicle';
+          }
+
+          callback(null, folder);
+        },
+
+        filename: (req, file, callback) => {
+          const uniqueName =
+            `${Date.now()}-${file.originalname}`;
+
+          callback(null, uniqueName);
+        },
+      }),
+    },
+  ),
+)
+async registerRider(
+  @Body() dto: CreateRiderDto,
+
+  @UploadedFiles()
+  files:
+  {
+    profileImage?: Express.Multer.File[];
+    nidFrontImage?: Express.Multer.File[];
+    nidBackImage?: Express.Multer.File[];
+    drivingLicenseFrontImage?: Express.Multer.File[];
+    drivingLicenseBackImage?: Express.Multer.File[];
+    vehicleImage?: Express.Multer.File[];
+  },
+)
+{
+  if (
+    !files.profileImage?.length ||
+    !files.nidFrontImage?.length ||
+    !files.nidBackImage?.length ||
+    !files.drivingLicenseFrontImage?.length ||
+    !files.drivingLicenseBackImage?.length ||
+    !files.vehicleImage?.length
+  )
+  {
+    throw new BadRequestException(
+      'Profile image, NID front image, NID back image, driving license front image, driving license back image and vehicle image are required',
+    );
+  }
+
+  return await this.userService.createRider(
+    dto,
+    files,
+  );
+}
+
+@Get('rider-pending-documents')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+async allRiderPendingDocuments(
+    @Query() paginationDto: PaginationDto,
+)
+{
+    return await this.userService.allRiderPendingDocuments(
+        paginationDto,
+    );
+}
+
 }
