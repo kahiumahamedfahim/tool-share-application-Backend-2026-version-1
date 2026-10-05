@@ -29,6 +29,8 @@ import { Query } from '@nestjs/common';
 import { PaginationDto } from '../pagination/pagination-dto';
 import { RejectUserDocumentDto } from './dto/reject-user-document.dto';
 import { CreateRiderDto } from '../users/dto/create-rider-dto';
+import { ValidationPipe } from '@nestjs/common';
+import { UsePipes } from '@nestjs/common';
 
 @Controller('users')
 export class UserController{
@@ -37,6 +39,7 @@ export class UserController{
   ) {}
 
   @Post('admin/register')
+   @UsePipes(new ValidationPipe())
   @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 @UseInterceptors(
@@ -108,6 +111,7 @@ export class UserController{
 
 
   @Post('verify-email')
+   @UsePipes(new ValidationPipe())
   async verifyEmail(
     @Body() dto: VerifyEmailDto,
   ) {
@@ -131,6 +135,7 @@ export class UserController{
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN,UserRole.MODERATOR)
   @Get(':userId/document')
+   @UsePipes(new ValidationPipe())
   async getUserDocumentById(
     @Param('userId') userId: string,
   ) {
@@ -151,11 +156,13 @@ async approveUserDocument(
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 @Get('Admin-Pending-documents')
+ @UsePipes(new ValidationPipe())
   async allAdminPendingDocuments( @Query() paginationDto: PaginationDto,)
   {
       return await this.userService.allAdminPendingDocuments(paginationDto);
   }
 @Post('document/reject')
+ @UsePipes(new ValidationPipe())
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 async rejectUserDocument(
@@ -168,6 +175,7 @@ async rejectUserDocument(
   );
 }
  @Post('moderator/register')
+  @UsePipes(new ValidationPipe())
   @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 @UseInterceptors(
@@ -240,6 +248,7 @@ async rejectUserDocument(
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 @Get('moderator-Pending-documents')
+ @UsePipes(new ValidationPipe())
   async allModeratorPendingDocuments( @Query() paginationDto: PaginationDto,)
   {
       return await this.userService.allModeratorPendingDocuments(paginationDto);
@@ -247,6 +256,7 @@ async rejectUserDocument(
 
 
   @Post('rider/register')
+   @UsePipes(new ValidationPipe())
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.MODERATOR)
 @UseInterceptors(
@@ -363,6 +373,89 @@ async allRiderPendingDocuments(
 )
 {
     return await this.userService.allRiderPendingDocuments(
+        paginationDto,
+    );
+}
+
+  @Post('register')
+   @UsePipes(new ValidationPipe())
+ 
+@UseInterceptors(
+  FileFieldsInterceptor(
+    [
+      {
+        name: 'profileImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidFrontImage',
+        maxCount: 1,
+      },
+      {
+        name: 'nidBackImage',
+        maxCount: 1,
+      },
+    ],
+    {
+      storage: diskStorage({
+        destination: (req, file, callback) => {
+          let folder = './uploads';
+
+          if (file.fieldname === 'profileImage') {
+            folder = './uploads/profile';
+          } else if (file.fieldname === 'nidFrontImage') {
+            folder = './uploads/nid-front';
+          } else if (file.fieldname === 'nidBackImage') {
+            folder = './uploads/nid-back';
+          }
+
+          callback(null, folder);
+        },
+
+        filename: (req, file, callback) => {
+          const uniqueName =
+            `${Date.now()}-${file.originalname}`;
+
+          callback(null, uniqueName);
+        },
+      }),
+    },
+  ),
+)
+  async register(
+    @Body() dto: CreateAdminDto,
+    @UploadedFiles()
+    files: {
+      profileImage?: Express.Multer.File[];
+      nidFrontImage?: Express.Multer.File[];
+      nidBackImage?: Express.Multer.File[];
+    },
+    
+  ) {
+    if (
+  !files.profileImage?.length ||
+  !files.nidFrontImage?.length ||
+  !files.nidBackImage?.length
+) {
+  throw new BadRequestException(
+    'Profile image, NID front image and NID back image are required',
+  );
+}
+    return await this.userService.createUserRegistration(
+      dto,
+      files,
+    );
+  }
+
+@Get('user-pending-documents')
+ @UsePipes(new ValidationPipe())
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+async allUserPendingDocuments(
+    @Query() paginationDto: PaginationDto,
+)
+{
+    return await this.userService.allUsersPendingDocuments(
         paginationDto,
     );
 }

@@ -7,6 +7,7 @@ import { AppService } from './app.service';
 import {UserModule} from './modules/users/user.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth-module';
+import { PusherModule } from './pusher/pusher.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -15,6 +16,7 @@ import { AuthModule } from './auth/auth-module';
     EmailModule,
     AuthModule,
     UserModule,
+    PusherModule,
     
 
     TypeOrmModule.forRoot({

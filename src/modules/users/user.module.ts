@@ -10,6 +10,7 @@ import { UserService } from './user-service';
 
 import { EmailModule } from 'src/email/email.module';
 import { AuthModule } from 'src/auth/auth-module';
+import { PusherModule } from 'src/pusher/pusher.module';
 
 @Module({
   imports: [
@@ -20,7 +21,8 @@ import { AuthModule } from 'src/auth/auth-module';
     ]),
 
     EmailModule,
-    AuthModule
+    AuthModule,
+    PusherModule
   ],
 
   controllers: [

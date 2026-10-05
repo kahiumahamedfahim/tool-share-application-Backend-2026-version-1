@@ -29,9 +29,9 @@ export class CreateAdminDto {
 
   @IsString()
   @IsNotEmpty()
-  @Matches(/^(?:\+8801|01)[3-9]\d{8}$/, {
+@Matches(/^01[3-9]\d{8}$/, {
     message: 'Please provide a valid Bangladeshi phone number',
-  })
+})
   phone!: string;
 
   @IsString()
