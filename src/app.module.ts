@@ -8,6 +8,7 @@ import {UserModule} from './modules/users/user.module';
 import { EmailModule } from './email/email.module';
 import { AuthModule } from './auth/auth-module';
 import { PusherModule } from './pusher/pusher.module';
+import { CategoryModule } from './modules/Category/category.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -17,6 +18,7 @@ import { PusherModule } from './pusher/pusher.module';
     AuthModule,
     UserModule,
     PusherModule,
+    CategoryModule,
     
 
     TypeOrmModule.forRoot({
