@@ -5,6 +5,7 @@ import
     IsString,
     MaxLength,
 } from 'class-validator';
+import { CategoryStatus } from '../Enums/category.enum';
 
 export class UpdateCategoryDto
 {
@@ -17,4 +18,7 @@ export class UpdateCategoryDto
     @IsOptional()
     @IsString()
     description?: string;
+
+    @IsOptional()
+    status!: CategoryStatus;
 }

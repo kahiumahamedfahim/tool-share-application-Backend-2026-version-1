@@ -4,6 +4,9 @@ import { Category } from "./category.entity";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createCategoryDto } from "./Dto/create-catagory-dto";
 import { UpdateCategoryDto } from "./Dto/update-category.dto";
+import { CategoryStatus } from "./Enums/category.enum";
+import { ConfigModule } from "@nestjs/config";
+import { PaginationDto } from "../pagination/pagination-dto";
 
 @Injectable()
 export class CategoryService
@@ -45,54 +48,81 @@ export class CategoryService
         .padStart(3, '0')}`;
 
      }
-     async create(createCategoryDto : createCategoryDto): Promise<any>
+     async create(createCategoryDto : createCategoryDto,
+        image?: Express.Multer.File,
+     ): Promise<any>
      {
-        try 
-        {
-            const existCategory= await this.categoryRepository.findOne(
-                {
-                    where : 
-                    {
-                        name : createCategoryDto.name,
-                    }
-                }
-            );
-            if(existCategory)
+        const exisitngCategory= await this.categoryRepository.findOne({
+            where : 
             {
-                throw new ConflictException('category with this name is already exists');
+                name: createCategoryDto.name.trim(),
             }
-          
-            const categoryId= await this.genateredCategoryId();
-            const category=
-            this.categoryRepository.create(
-                {
-                    categoryId,
-                    name: createCategoryDto.name,
-                    description: createCategoryDto.description,
-                    createdAt:new Date(),
-
-                }
-            );
-            return await this.categoryRepository.save(category);
-
-        }
-        catch(error)
+        });
+        if(exisitngCategory)
         {
-            return error;
+            throw new ConflictException('category with this name is already exists');
         }
+        const categoryId= await this.genateredCategoryId();
+        let imageName : string | null = null;
+        if(image)
+        {
+            imageName=image.filename;
+        }
+      const category = this.categoryRepository.create(
+    {
+        categoryId: categoryId,
+        name: createCategoryDto.name,
+        description: createCategoryDto.description,
+        image: imageName,
+    }
+);
+        return await this.categoryRepository.save(category);
+
      }
-     async findAll() : Promise<Category[]>
-     {
-        const categories=await this.categoryRepository.find(
+     async findAll(
+    paginationDto: PaginationDto,
+): Promise<any>
+{
+    const page =
+        paginationDto.page;
+
+    const limit =
+        paginationDto.limit;
+
+    const skip =
+        (page - 1) * limit;
+
+    const [categories, total] =
+        await this.categoryRepository.findAndCount(
             {
-                order: 
+                order:
                 {
-                    createdAt: "DESC"
-                }
-            }
+                    createdAt: 'DESC',
+                },
+
+                skip: skip,
+
+                take: limit,
+            },
         );
-        return categories;
-     }
+
+    const totalPages =
+        Math.ceil(
+            total / limit,
+        );
+
+    return {
+        data: categories,
+
+        meta:
+        {
+            page: page,
+            limit: limit,
+            total: total,
+            totalPages: totalPages,
+        },
+    };
+}
 
      async findOne(categoryId: string): Promise<Category>
      {
@@ -111,13 +141,16 @@ export class CategoryService
         return category;
      }
 
-   async update(
+    async update(
     categoryId: string,
     updateCategoryDto: UpdateCategoryDto,
+    image?: Express.Multer.File,
 ): Promise<Category>
 {
     const category =
-        await this.findOne(categoryId);
+        await this.findOne(
+            categoryId,
+        );
 
     if (updateCategoryDto.name)
     {
@@ -137,14 +170,38 @@ export class CategoryService
                 'Category with this name already exists',
             );
         }
+
+        category.name =
+            updateCategoryDto.name;
     }
 
-    Object.assign(
-        category,
-        updateCategoryDto,
-    );
+    if (
+        updateCategoryDto.description !==
+        undefined
+    )
+    {
+        category.description =
+            updateCategoryDto.description;
+    }
 
-    return await this.categoryRepository.save(category);
+    if (
+        updateCategoryDto.status !==
+        undefined
+    )
+    {
+        category.status =
+            updateCategoryDto.status;
+    }
+
+    if (image)
+    {
+        category.image =
+            image.filename;
+    }
+
+    return await this.categoryRepository.save(
+        category,
+    );
 }
 
 async remove(
@@ -155,5 +212,27 @@ async remove(
         await this.findOne(categoryId);
 
     await this.categoryRepository.remove(category);
+}
+
+
+async activateCategory(categoryId: string): Promise<Category>
+{
+    const category= await this.findOne(categoryId);
+    if(category.status==CategoryStatus.ACTIVE)
+    {
+        throw new ConflictException("category is already activated");
+    }
+    category.status=CategoryStatus.ACTIVE;
+    return await this.categoryRepository.save(category);
+}
+async deactiveCategory(categoryId: string): Promise<Category>
+{
+    const category= await this.findOne(categoryId);
+    if(category.status===CategoryStatus.INACTIVE)
+    {
+        throw new ConflictException("category is already deactivate");
+    }
+    category.status=CategoryStatus.INACTIVE;
+    return await this.categoryRepository.save(category);
 }
 }
