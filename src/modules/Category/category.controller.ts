@@ -36,69 +36,103 @@ export class CategoryController
     )
     {
     }
-    @UsePipes(new ValidationPipe())
 
- 
-@Post('create')
-@UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles(UserRole.ADMIN,UserRole.MODERATOR)
-@UseInterceptors(
-    FileInterceptor(
-        'image',
-        {
-            fileFilter: (req, file, cb) =>
+    /*
+     * Shared validation options for
+     * all category write endpoints.
+     */
+
+    private static readonly categoryValidationPipe =
+        new ValidationPipe(
             {
-                if (
-                    file.originalname.match(
-                        /^.*\.(jpg|jpeg|png|webp)$/,
+                whitelist: true,
+                forbidNonWhitelisted: true,
+                transform: true,
+            },
+        );
+
+    /*
+     * Shared image upload rules.
+     * Category images:
+     * - must be jpg/jpeg/png/webp
+     * - must not exceed 2 MB
+     * - are stored in ./uploads/category
+     */
+
+    private static readonly categoryImageInterceptor =
+        FileInterceptor(
+            'image',
+            {
+                fileFilter: (req, file, cb) =>
+                {
+                    if (
+                        file.originalname.match(
+                            /^.*\.(jpg|jpeg|png|webp)$/i,
+                        )
                     )
-                )
-                {
-                    cb(
-                        null,
-                        true,
-                    );
-                }
-                else
-                {
-                    cb(
-                        new MulterError(
-                            'LIMIT_UNEXPECTED_FILE',
-                            file.fieldname,
-                        ),
-                        false,
-                    );
-                }
-            },
-
-            limits:
-            {
-                fileSize: 2 * 1024 * 1024,
-            },
-
-            storage: diskStorage(
-                {
-                    destination:
-                        './uploads/category',
-
-                    filename: (
-                        req,
-                        file,
-                        cb,
-                    ) =>
                     {
                         cb(
                             null,
-                            Date.now() +
-                            '_' +
-                            file.originalname,
+                            true,
                         );
-                    },
+                    }
+                    else
+                    {
+                        cb(
+                            new MulterError(
+                                'LIMIT_UNEXPECTED_FILE',
+                                file.fieldname,
+                            ),
+                            false,
+                        );
+                    }
                 },
-            ),
-        },
-    ),
-)
+
+                limits:
+                {
+                    fileSize: 2 * 1024 * 1024,
+                },
+
+                storage: diskStorage(
+                    {
+                        destination:
+                            './uploads/category',
+
+                        filename: (
+                            req,
+                            file,
+                            cb,
+                        ) =>
+                        {
+                            const safeName = file.originalname
+                                .replace(
+                                    /\s+/g,
+                                    '_',
+                                )
+                                .replace(
+                                    /[^a-zA-Z0-9._-]/g,
+                                    '',
+                                );
+
+                            cb(
+                                null,
+                                Date.now() +
+                                '_' +
+                                safeName,
+                            );
+                        },
+                    },
+                ),
+            },
+        );
+
+    @UsePipes(CategoryController.categoryValidationPipe)
+
+
+@Post('create')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN,UserRole.MODERATOR)
+@UseInterceptors(CategoryController.categoryImageInterceptor)
 async create(
     @Body() createCategoryDto: createCategoryDto,
     @UploadedFile() image?: Express.Multer.File,
@@ -130,20 +164,23 @@ async findAll(
             categoryId,
         );
     }
-    @UsePipes(new ValidationPipe())
+    @UsePipes(CategoryController.categoryValidationPipe)
 
   
     @Patch(':categoryId')
     @UseGuards(JwtAuthGuard, RolesGuard)
     @Roles(UserRole.ADMIN,UserRole.MODERATOR)
+    @UseInterceptors(CategoryController.categoryImageInterceptor)
     async update(
         @Param('categoryId') categoryId: string,
         @Body() updateCategoryDto: UpdateCategoryDto,
+        @UploadedFile() image?: Express.Multer.File,
     )
     {
         return await this.categoryService.update(
             categoryId,
             updateCategoryDto,
+            image,
         );
     }
 

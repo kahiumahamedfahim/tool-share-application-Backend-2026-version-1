@@ -1,23 +1,88 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Repository } from "typeorm";
 import { Category } from "./category.entity";
 import { InjectRepository } from "@nestjs/typeorm";
 import { createCategoryDto } from "./Dto/create-catagory-dto";
 import { UpdateCategoryDto } from "./Dto/update-category.dto";
 import { CategoryStatus } from "./Enums/category.enum";
-import { ConfigModule } from "@nestjs/config";
 import { PaginationDto } from "../pagination/pagination-dto";
+import { Product } from "../Product/Entity/product.entity";
+import { join } from "path";
+import { promises as fsPromises } from "fs";
 
 @Injectable()
 export class CategoryService
 {
      constructor(
         @InjectRepository(Category)
-        private readonly categoryRepository : Repository<Category>
-        
+        private readonly categoryRepository : Repository<Category>,
+
+        @InjectRepository(Product)
+        private readonly productRepository : Repository<Product>
      )
      {
 
+     }
+
+     /*
+      * Normalizes a category name:
+      * - trims leading/trailing whitespace
+      * - collapses repeated inner whitespace to a single space
+      */
+     private normalizeCategoryName(name : string) : string
+     {
+        return name.trim().replace(/\s+/g, ' ');
+     }
+
+     /*
+      * Finds another category that already uses this name
+      * (case-insensitive), optionally excluding a category id.
+      */
+     private async findDuplicateCategoryName(
+        categoryName : string,
+        excludeCategoryId? : string,
+     ) : Promise<Category | null>
+     {
+        const normalizedName = this.normalizeCategoryName(categoryName);
+
+        if (!normalizedName)
+        {
+            return null;
+        }
+
+        const candidate = await this.categoryRepository
+            .createQueryBuilder('category')
+            .where('LOWER(category.name) = LOWER(:name)', { name: normalizedName })
+            .getOne();
+
+        if (candidate && candidate.categoryId !== excludeCategoryId)
+        {
+            return candidate;
+        }
+
+        return null;
+     }
+
+     /*
+      * Deletes a category image file from disk (best effort).
+      */
+     private async deleteCategoryImageFile(imageName : string | null) : Promise<void>
+     {
+        if (!imageName)
+        {
+            return;
+        }
+
+        try
+        {
+            await fsPromises.unlink(
+                join(process.cwd(), 'uploads', 'category', imageName),
+            );
+        }
+        catch
+        {
+            // File may already be missing; deletion is best effort only.
+        }
      }
      private async genateredCategoryId() : Promise<string>
      {
@@ -52,17 +117,19 @@ export class CategoryService
         image?: Express.Multer.File,
      ): Promise<any>
      {
-        const exisitngCategory= await this.categoryRepository.findOne({
-            where : 
-            {
-                name: createCategoryDto.name.trim(),
-            }
-        });
+        const normalizedName = this.normalizeCategoryName(createCategoryDto.name);
+
+        if (!normalizedName)
+        {
+            throw new BadRequestException('Category name is required');
+        }
+
+        const exisitngCategory = await this.findDuplicateCategoryName(normalizedName);
+
         if(exisitngCategory)
         {
             throw new ConflictException('category with this name is already exists');
-        }
-        const categoryId= await this.genateredCategoryId();
+        }        const categoryId= await this.genateredCategoryId();
         let imageName : string | null = null;
         if(image)
         {
@@ -71,7 +138,7 @@ export class CategoryService
       const category = this.categoryRepository.create(
     {
         categoryId: categoryId,
-        name: createCategoryDto.name,
+        name: normalizedName,
         description: createCategoryDto.description,
         image: imageName,
     }
@@ -154,17 +221,24 @@ export class CategoryService
 
     if (updateCategoryDto.name)
     {
-        const existingCategory =
-            await this.categoryRepository.findOne({
-                where: {
-                    name: updateCategoryDto.name,
-                },
-            });
+        const normalizedName = this.normalizeCategoryName(
+            updateCategoryDto.name,
+        );
 
-        if (
-            existingCategory &&
-            existingCategory.categoryId !== categoryId
-        )
+        if (!normalizedName)
+        {
+            throw new BadRequestException(
+                'Category name is required',
+            );
+        }
+
+        const existingCategory =
+            await this.findDuplicateCategoryName(
+                normalizedName,
+                categoryId,
+            );
+
+        if (existingCategory)
         {
             throw new ConflictException(
                 'Category with this name already exists',
@@ -172,7 +246,7 @@ export class CategoryService
         }
 
         category.name =
-            updateCategoryDto.name;
+            normalizedName;
     }
 
     if (
@@ -193,15 +267,32 @@ export class CategoryService
             updateCategoryDto.status;
     }
 
+    let previousImage : string | null = null;
+
     if (image)
     {
+        previousImage = category.image;
+
         category.image =
             image.filename;
     }
 
-    return await this.categoryRepository.save(
-        category,
-    );
+    const updatedCategory =
+        await this.categoryRepository.save(
+            category,
+        );
+
+    /*
+     * Remove the replaced image file
+     * so old uploads do not accumulate.
+     */
+
+    if (previousImage)
+    {
+        await this.deleteCategoryImageFile(previousImage);
+    }
+
+    return updatedCategory;
 }
 
 async remove(
@@ -211,7 +302,31 @@ async remove(
     const category =
         await this.findOne(categoryId);
 
+    /*
+     * A category that is referenced by
+     * products cannot be deleted. It
+     * must be deactivated instead.
+     */
+
+    const productsCount =
+        await this.productRepository.count(
+            {
+                where: {
+                    categoryId,
+                },
+            },
+        );
+
+    if (productsCount > 0)
+    {
+        throw new ConflictException(
+            `This category is used by ${productsCount} product(s) and cannot be deleted. Deactivate it instead.`,
+        );
+    }
+
     await this.categoryRepository.remove(category);
+
+    await this.deleteCategoryImageFile(category.image);
 }
 
 

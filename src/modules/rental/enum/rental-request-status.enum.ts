@@ -1,0 +1,8 @@
+export enum RentalRequestStatus {
+    PENDING = 'PENDING',
+    NEGOTIATING = 'NEGOTIATING',
+    PRICE_AGREED = 'PRICE_AGREED',
+    REJECTED = 'REJECTED',
+    EXPIRED = 'EXPIRED',
+    APPROVED = 'APPROVED',
+}

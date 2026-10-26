@@ -1,5 +1,6 @@
 import
 {
+    IsEnum,
     IsNotEmpty,
     IsOptional,
     IsString,
@@ -20,5 +21,6 @@ export class UpdateCategoryDto
     description?: string;
 
     @IsOptional()
-    status!: CategoryStatus;
+    @IsEnum(CategoryStatus)
+    status?: CategoryStatus;
 }

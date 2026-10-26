@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { Category } from '../Category/category.entity';
+import { Product } from '../Product/Entity/product.entity';
 
 import { CategoryService } from '../Category/category-service';
 import { CategoryController } from './category.controller';
@@ -12,6 +13,7 @@ import { AuthModule } from 'src/auth/auth-module';
     imports: [
         TypeOrmModule.forFeature([
             Category,
+            Product,
         ]),
          AuthModule,
     ],

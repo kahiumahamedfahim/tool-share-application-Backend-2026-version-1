@@ -3,6 +3,7 @@ import { UserStatus } from "../enums/user-status-enum";
 import { UserRole } from "../enums/user-role-enum";
 import { EmailVerification } from "./email-verification.entity";
 import { UserDocument } from "./user-document.entity";
+import { Product } from "src/modules/Product/Entity/product.entity";
 @Entity('users')
 export class User 
 {
@@ -90,5 +91,10 @@ export class User
   (userDocument) => userDocument.user,
 )
 userDocument!: UserDocument;
+@OneToMany(
+    () => Product,
+    (product) => product.owner,
+)
+products!: Product[];
 }
 

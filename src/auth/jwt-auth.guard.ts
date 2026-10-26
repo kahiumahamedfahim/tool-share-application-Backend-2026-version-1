@@ -16,35 +16,73 @@ export class JwtAuthGuard implements CanActivate {
 
   async canActivate(
     context: ExecutionContext,
-  ): Promise<boolean> {
-
+): Promise<boolean>
+{
     const request =
-      context.switchToHttp().getRequest();
-      console.log('COOKIE HEADER:', request.headers.cookie);
-console.log('PARSED COOKIES:', request.cookies);
+        context.switchToHttp().getRequest();
+
+    console.log("===== JWT GUARD START =====");
+
+    console.log(
+        "COOKIE HEADER:",
+        request.headers.cookie,
+    );
+
+    console.log(
+        "PARSED COOKIES:",
+        request.cookies,
+    );
 
     const token =
-      this.extractTokenFromCookie(request);
+        this.extractTokenFromCookie(request);
 
-    if (!token) {
-      throw new UnauthorizedException(
-        'Authentication required.',
-      );
+    console.log(
+        "TOKEN EXISTS:",
+        !!token,
+    );
+
+    if (!token)
+    {
+        console.log(
+            "JWT GUARD FAILED: NO TOKEN",
+        );
+
+        throw new UnauthorizedException(
+            "Authentication required.",
+        );
     }
 
-    try {
-      const payload =
-        await this.jwtService.verifyAsync(token);
+    try
+    {
+        const payload =
+            await this.jwtService.verifyAsync(
+                token,
+            );
 
-      request['user'] = payload;
-    } catch {
-      throw new UnauthorizedException(
-        'Invalid or expired token.',
-      );
+        console.log(
+            "JWT PAYLOAD:",
+            payload,
+        );
+
+        request["user"] = payload;
+
+        console.log(
+            "JWT GUARD PASSED",
+        );
+    }
+    catch
+    {
+        console.log(
+            "JWT GUARD FAILED: INVALID TOKEN",
+        );
+
+        throw new UnauthorizedException(
+            "Invalid or expired token.",
+        );
     }
 
     return true;
-  }
+}
 
   private extractTokenFromCookie(
     request: Request,

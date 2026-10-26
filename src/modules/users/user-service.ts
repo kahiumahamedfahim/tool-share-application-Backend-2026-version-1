@@ -477,7 +477,7 @@ async getPendingDocuments() : Promise<UserDocument[]>
 {
     const documents = await this.userDocumentRepsitory.find(
         {
-            where : 
+            where :
             {
                 verificationStatus: DocumentVerificationStatus.PENDING,
 
@@ -485,7 +485,32 @@ async getPendingDocuments() : Promise<UserDocument[]>
         }
     );
     return documents;
-    
+
+}
+async getRiders() : Promise<User[]>
+{
+    return await this.userRepository.find(
+        {
+            where :
+            {
+                role: UserRole.RIDER,
+            },
+            select :
+            {
+                userId: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                phone: true,
+                role: true,
+                emailVerificationStatus: true,
+            },
+            order :
+            {
+                firstName: 'ASC',
+            },
+        },
+    );
 }
 async getUserDocumentById(userId : string ) : Promise<UserDocument>
 {

@@ -132,6 +132,13 @@ export class UserController{
     return await this.userService.getPendingDocuments();
   }
 
+  @Get('riders')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.MODERATOR)
+  async getRiders() {
+    return await this.userService.getRiders();
+  }
+
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN,UserRole.MODERATOR)
   @Get(':userId/document')
