@@ -1,9 +1,11 @@
 
 import {
     IsBoolean,
+    IsDateString,
     IsInt,
     IsNotEmpty,
     IsNumber,
+    IsOptional,
     IsString,
     MaxLength,
     Min,
@@ -67,6 +69,52 @@ export class CreateProductDto {
     })
     @IsBoolean()
     allowSameDayRental!: boolean;
+
+    // =====================================================
+    // Owner-chosen date windows (ISO date strings)
+    // rentalWindow: when the product may be rented
+    // deliveryWindow: when owner hands product to rider
+    // returnWindow: when product must be back with owner
+    // =====================================================
+
+    @IsOptional()
+    @IsDateString()
+    rentalWindowStart?: string;
+
+    @IsOptional()
+    @IsDateString()
+    rentalWindowEnd?: string;
+
+    @IsOptional()
+    @IsDateString()
+    deliveryWindowStart?: string;
+
+    @IsOptional()
+    @IsDateString()
+    deliveryWindowEnd?: string;
+
+    @IsOptional()
+    @IsDateString()
+    returnWindowStart?: string;
+
+    @IsOptional()
+    @IsDateString()
+    returnWindowEnd?: string;
+
+    // Platform fee percentage per day (default 10)
+    @IsOptional()
+    @Type(() => Number)
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
+    @Max(100)
+    platformFeePercentage?: number;
+
+    // Base delivery fee (default 0)
+    @IsOptional()
+    @Type(() => Number)
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
+    deliveryFeeBase?: number;
 
     // Pickup location
 

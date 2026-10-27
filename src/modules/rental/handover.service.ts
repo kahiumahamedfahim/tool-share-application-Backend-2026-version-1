@@ -154,6 +154,8 @@ export class HandoverService {
         title: string,
         message: string,
         actor?: User | null,
+        rentalId?: string | null,
+        link?: string | null,
     ): PusherNotificationData {
         return {
             type,
@@ -165,6 +167,8 @@ export class HandoverService {
                 : "ToolShare",
             email: actor?.email ?? "",
             timestamp: new Date(),
+            rentalId: rentalId ?? null,
+            link: link ?? null,
         };
     }
 
@@ -196,7 +200,6 @@ export class HandoverService {
      */
     private partyChannels(
         rental: ActualRental,
-        extraModerator = false,
     ): string[] {
         const channels: string[] = [
             PUSHER_CHANNELS.OWNER(rental.ownerId),
@@ -209,8 +212,6 @@ export class HandoverService {
                 `rider-${rental.riderId}-channel`,
             );
         }
-
-        void extraModerator;
 
         return channels;
     }
@@ -577,6 +578,8 @@ export class HandoverService {
                     "Early Return Requested",
                     `The renter wants to return "${product?.name ?? "the product"}" before the rental end date. Moderator approval is required.`,
                     moderator,
+                    rental.rentalRequestId,
+                    `/rentals/request/${rental.rentalRequestId}`,
                 ),
             );
 
@@ -792,6 +795,8 @@ export class HandoverService {
                     ? `"${product?.name ?? "the product"}" was delivered to the renter. Rental day 1 starts ${rental.startDate.toISOString().slice(0, 10)}; the scheduled end date is ${rental.endDate.toISOString().slice(0, 10)}.`
                     : `"${product?.name ?? "the product"}": step "${STAGE_LABELS[stage]}" was verified.`,
                 rider,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
             ),
         );
 
@@ -1069,10 +1074,145 @@ export class HandoverService {
                     ? `The moderator verified "${product?.name ?? "the product"}" at the warehouse.`
                     : `The moderator found an issue with "${product?.name ?? "the product"}" at the warehouse. Contact the ToolShare moderator team.`,
                 moderator,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
             ),
         );
 
         return savedCheckpoint;
+    }
+
+    // =====================================================
+    // MODERATOR - SUBMIT WAREHOUSE MEDIA
+    // Upload inspection photos/videos for a warehouse
+    // gate checkpoint.
+    // =====================================================
+
+    async submitModeratorMedia(
+        rentalId: string,
+        moderatorId: string,
+        stage: HandoverStage,
+        files: UploadedHandoverFile[],
+        note?: string,
+    ): Promise<{ checkpointId: string; mediaCount: number }> {
+
+        // -------------------------------------------------
+        // Stage must be a moderator gate
+        // -------------------------------------------------
+
+        if (!MODERATOR_GATE_STAGES.includes(stage)) {
+            throw new BadRequestException(
+                "This step is a moderator warehouse inspection",
+            );
+        }
+
+        const rental = await this.loadRental(rentalId);
+
+        // -------------------------------------------------
+        // Checkpoint must exist for this stage
+        // -------------------------------------------------
+
+        const checkpoint =
+            await this.checkpointRepository.findOne({
+                where: { rentalId, stage },
+            });
+
+        if (!checkpoint) {
+            throw new NotFoundException(
+                `No warehouse gate checkpoint found for "${STAGE_LABELS[stage]}". Submit the gate verdict first.`,
+            );
+        }
+
+        // -------------------------------------------------
+        // Validate media
+        // -------------------------------------------------
+
+        if (!files || files.length === 0) {
+            throw new BadRequestException(
+                "At least one photo or video is required",
+            );
+        }
+
+        const mediaEntries =
+            this.classifyAndValidateMedia(files);
+
+        const maxTotal = 6;
+        if (mediaEntries.length > maxTotal) {
+            throw new BadRequestException(
+                `Maximum ${maxTotal} media files allowed per checkpoint`,
+            );
+        }
+
+        // -------------------------------------------------
+        // Save media linked to the checkpoint
+        // -------------------------------------------------
+
+        for (const entry of mediaEntries) {
+            const media =
+                this.mediaRepository.create({
+                    checkpointId:
+                        checkpoint.checkpointId,
+                    mediaType: entry.mediaType,
+                    fileUrl: entry.fileUrl,
+                });
+
+            await this.mediaRepository.save(media);
+        }
+
+        // -------------------------------------------------
+        // Update checkpoint note if provided
+        // -------------------------------------------------
+
+        if (note && note.trim()) {
+            checkpoint.note =
+                checkpoint.note
+                    ? `${checkpoint.note} | ${note.trim()}`
+                    : note.trim();
+
+            await this.checkpointRepository.save(checkpoint);
+        }
+
+        // -------------------------------------------------
+        // State history
+        // -------------------------------------------------
+
+        await this.appendStateHistory(
+            rental,
+            stage,
+            moderatorId,
+        );
+
+        // -------------------------------------------------
+        // Notifications
+        // -------------------------------------------------
+
+        const moderator =
+            await this.userRepository.findOne({
+                where: { userId: moderatorId },
+            });
+
+        const product =
+            await this.productRepository.findOne({
+                where: { productId: rental.productId },
+            });
+
+        await this.notify(
+            this.partyChannels(rental),
+            this.eventForStage(stage),
+            this.buildNotification(
+                PusherNotificationType.MANUAL_PAYMENT,
+                "Warehouse Evidence Added",
+                `The moderator added ${mediaEntries.length} evidence item(s) for "${product?.name ?? "the product"}" at the warehouse (${STAGE_LABELS[stage]}).`,
+                moderator,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
+            ),
+        );
+
+        return {
+            checkpointId: checkpoint.checkpointId,
+            mediaCount: mediaEntries.length,
+        };
     }
 
     // =====================================================

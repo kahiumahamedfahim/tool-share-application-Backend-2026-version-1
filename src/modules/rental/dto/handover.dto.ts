@@ -75,6 +75,18 @@ export class AssignHandoverRiderDto {
 }
 
 // =====================================================
+// MODERATOR - SUBMIT WAREHOUSE MEDIA
+// =====================================================
+
+export class SubmitModeratorMediaDto {
+
+    @IsOptional()
+    @IsString()
+    @MaxLength(1000)
+    note?: string;
+}
+
+// =====================================================
 // SHARED - STAGE PATH PARAM VALIDATION
 // =====================================================
 

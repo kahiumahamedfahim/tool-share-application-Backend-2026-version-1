@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { DataSource, EntityManager, Repository } from "typeorm";
+import { DataSource, EntityManager, Repository, MoreThan, In } from "typeorm";
 import { UserRole } from "./enums/user-role-enum";
 import { User } from "./entity/user-entity";
 import * as bcrypt from 'bcrypt';
@@ -24,9 +24,15 @@ import { PaginationDto } from "../pagination/pagination-dto";
 import { InternalServerErrorException } from "@nestjs/common";
 import { RejectUserDocumentDto } from "./dto/reject-user-document.dto";
 import { CreateRiderDto } from "./dto/create-rider-dto";
+import { UpdateMyProfileDto } from "./dto/update-my-profile.dto";
+import { UpdateMyPasswordDto } from "./dto/update-my-password.dto";
+import { ForgotPasswordDto } from "./dto/forgot-password.dto";
+import { ResetPasswordDto } from "./dto/forgot-password.dto";
 import { PusherService } from 'src/pusher/pusher.service';
 import { PUSHER_CHANNELS, PUSHER_EVENTS } from "src/pusher/pusher.constants";
 import { PusherNotificationData,PusherNotificationType } from "src/pusher/pusher.types";
+import { ActualRental, ActualRentalStatus } from "src/modules/rental/entity/actual-rental.entity";
+import { RentalRequest } from "src/modules/rental/entity/rental-request.entity";
 @Injectable()
 export class UserService 
 {
@@ -1926,5 +1932,470 @@ async allUsersPendingDocuments(
     }
 }
 
+async getAllUsers(
+    paginationDto: PaginationDto,
+): Promise<{
+    data: any[];
+    meta: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+    };
+}> {
+    try {
+        const { page, limit } = paginationDto;
+        const skip = (page - 1) * limit;
+
+        const [users, total] =
+            await this.userRepository.findAndCount({
+                select: {
+                    userId: true,
+                    firstName: true,
+                    lastName: true,
+                    email: true,
+                    phone: true,
+                    role: true,
+                    status: true,
+                    emailVerificationStatus: true,
+                    createdAt: true,
+                    updatedAt: true,
+                },
+                order: {
+                    createdAt: "DESC",
+                },
+                skip,
+                take: limit,
+            });
+
+        const totalPages = Math.ceil(total / limit);
+
+        return {
+            data: users,
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages,
+            },
+        };
+    } catch (error) {
+        console.error(
+            "Error fetching all users:",
+            error,
+        );
+
+        throw new InternalServerErrorException(
+            "Failed to fetch all users",
+        );
+    }
+}
+
+async toggleUserStatus(
+    userId: string,
+    actorId: string,
+    actorRole: UserRole,
+    status: UserStatus,
+): Promise<User> {
+    const user =
+        await this.userRepository.findOne({
+            where: { userId },
+        });
+
+    if (!user) {
+        throw new NotFoundException("User not found");
+    }
+
+    // Cannot deactivate an admin user
+    if (
+        user.role === UserRole.ADMIN &&
+        status === UserStatus.INACTIVE
+    ) {
+        throw new BadRequestException(
+            "Cannot deactivate an admin user",
+        );
+    }
+
+    // If deactivating, check restrictions
+    if (status === UserStatus.INACTIVE) {
+        // Only ADMIN can deactivate MODERATOR/RIDER/USER
+        // MODERATOR can deactivate RIDER/USER but not MODERATOR/ADMIN
+        if (
+            actorRole === UserRole.MODERATOR &&
+            (user.role === UserRole.ADMIN ||
+                user.role === UserRole.MODERATOR)
+        ) {
+            throw new BadRequestException(
+                "Moderator cannot deactivate admin or other moderator users",
+            );
+        }
+
+        // Check if user has active rentals (cannot deactivate)
+        const activeRentals =
+            await this.getActiveRentalsForUser(userId);
+
+        if (activeRentals.length > 0) {
+            throw new BadRequestException(
+                "Cannot deactivate user with active rentals. Please wait until all rentals are completed and 30 days have passed.",
+            );
+        }
+
+        // Check if user has completed rentals within the last 30 days
+        const recentCompletedRentals =
+            await this.getRecentCompletedRentalsForUser(userId);
+
+        if (recentCompletedRentals.length > 0) {
+            throw new BadRequestException(
+                "Cannot deactivate user with rentals completed within the last 30 days",
+            );
+        }
+    }
+
+    user.status = status;
+    return await this.userRepository.save(user);
+}
+
+async getAllRentalLogs(
+    paginationDto: PaginationDto,
+): Promise<{
+    data: any[];
+    meta: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+    };
+}> {
+    try {
+        const { page, limit } = paginationDto;
+        const skip = (page - 1) * limit;
+
+        const [rentals, total] =
+            await this.dataSource
+                .getRepository(RentalRequest)
+                .createQueryBuilder("request")
+                .leftJoinAndSelect(
+                    "request.product",
+                    "product",
+                )
+                .leftJoinAndSelect(
+                    "request.renter",
+                    "renter",
+                )
+                .leftJoinAndSelect(
+                    "request.owner",
+                    "owner",
+                )
+                .orderBy("request.createdAt", "DESC")
+                .skip(skip)
+                .take(limit)
+                .getManyAndCount();
+
+        const totalPages = Math.ceil(total / limit);
+
+        // Fetch actual rentals for all rental request IDs
+        const rentalRequestIds = rentals.map((r) => r.rentalRequestId);
+        const actualRentals =
+            await this.dataSource
+                .getRepository(ActualRental)
+                .find({
+                    where: rentalRequestIds.length > 0
+                        ? {
+                            rentalRequestId: In(rentalRequestIds),
+                        }
+                        : {},
+                });
+
+        const actualRentalMap = new Map();
+        actualRentals.forEach((ar) => {
+            actualRentalMap.set(ar.rentalRequestId, {
+                rentalId: ar.rentalId,
+                status: ar.status,
+            });
+        });
+
+        return {
+            data: rentals.map((r) => {
+                const ar = actualRentalMap.get(r.rentalRequestId);
+                return {
+                    rentalRequestId: r.rentalRequestId,
+                    productName: r.product?.name,
+                    productId: r.product?.productId,
+                    renterName:
+                        r.renter?.firstName +
+                        " " +
+                        r.renter?.lastName,
+                    renterId: r.renterId,
+                    ownerName:
+                        r.owner?.firstName +
+                        " " +
+                        r.owner?.lastName,
+                    ownerId: r.ownerId,
+                    startDate: r.startDate,
+                    endDate: r.endDate,
+                    rentalDays: r.rentalDays,
+                    status: r.status,
+                    agreedPricePerDay: r.agreedPricePerDay,
+                    createdAt: r.createdAt,
+                    actualRentalStatus: ar?.status || null,
+                    actualRentalId: ar?.rentalId || null,
+                };
+            }),
+            meta: {
+                page,
+                limit,
+                total,
+                totalPages,
+            },
+        };
+    } catch (error) {
+        console.error(
+            "Error fetching rental logs:",
+            error,
+        );
+
+        throw new InternalServerErrorException(
+            "Failed to fetch rental logs",
+        );
+    }
+}
+
+private async getActiveRentalsForUser(
+    userId: string,
+): Promise<any[]> {
+    return await this.dataSource
+        .getRepository(ActualRental)
+        .find({
+            where: [
+                { renterId: userId, status: ActualRentalStatus.ACTIVE },
+                { renterId: userId, status: ActualRentalStatus.PENDING_HANDOVER },
+                { ownerId: userId, status: ActualRentalStatus.ACTIVE },
+                { ownerId: userId, status: ActualRentalStatus.PENDING_HANDOVER },
+            ],
+        });
+}
+
+private async getRecentCompletedRentalsForUser(
+    userId: string,
+): Promise<any[]> {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    return await this.dataSource
+        .getRepository(ActualRental)
+        .find({
+            where: [
+                {
+                    renterId: userId,
+                    status: ActualRentalStatus.COMPLETED,
+                    updatedAt: MoreThan(thirtyDaysAgo),
+                },
+                {
+                    ownerId: userId,
+                    status: ActualRentalStatus.COMPLETED,
+                    updatedAt: MoreThan(thirtyDaysAgo),
+                },
+            ],
+        });
+    }
+
+    async getMyProfile(userId: string): Promise<User> {
+        const user = await this.userRepository.findOne({
+            where: { userId },
+        });
+
+        if (!user) {
+            throw new NotFoundException("User not found");
+        }
+
+        return user;
+    }
+
+    async updateMyProfile(
+        userId: string,
+        dto: UpdateMyProfileDto,
+    ): Promise<User> {
+        const user = await this.userRepository.findOne({
+            where: { userId },
+        });
+
+        if (!user) {
+            throw new NotFoundException("User not found");
+        }
+
+        if (dto.firstName !== undefined) {
+            user.firstName = dto.firstName;
+        }
+
+        if (dto.lastName !== undefined) {
+            user.lastName = dto.lastName;
+        }
+
+        if (dto.phone !== undefined) {
+            user.phone = dto.phone;
+        }
+
+        if (dto.address !== undefined) {
+            user.address = dto.address;
+        }
+
+        if (dto.latitude !== undefined) {
+            user.latitude = dto.latitude;
+        }
+
+        if (dto.longitude !== undefined) {
+            user.longitude = dto.longitude;
+        }
+
+        return await this.userRepository.save(user);
+    }
+
+    async updateMyPassword(
+        userId: string,
+        dto: UpdateMyPasswordDto,
+    ): Promise<{ message: string }> {
+        const user = await this.userRepository.findOne({
+            where: { userId },
+        });
+
+        if (!user) {
+            throw new NotFoundException("User not found");
+        }
+
+        const isPasswordValid = await bcrypt.compare(
+            dto.currentPassword,
+            user.password,
+        );
+
+        if (!isPasswordValid) {
+            throw new BadRequestException("Current password is incorrect");
+        }
+
+        if (dto.newPassword !== dto.confirmPassword) {
+            throw new BadRequestException(
+                "New password and confirm password do not match",
+            );
+        }
+
+        user.password = await this.hasedPassword(dto.newPassword);
+        return await this.userRepository.save(user).then(() => ({
+            message: "Password updated successfully",
+        }));
+    }
+
+    async uploadMyDocument(
+        userId: string,
+        files: {
+            profileImage?: Express.Multer.File[];
+            nidFrontImage?: Express.Multer.File[];
+            nidBackImage?: Express.Multer.File[];
+        },
+    ): Promise<{ message: string }> {
+        const userDocument =
+            await this.userDocumentRepsitory.findOne({
+                where: { userId },
+            });
+
+        if (!userDocument) {
+            throw new NotFoundException("User document not found");
+        }
+
+        if (files.profileImage?.[0]) {
+            userDocument.profileImage = files.profileImage[0].filename;
+        }
+
+        if (files.nidFrontImage?.[0]) {
+            userDocument.nidFrontImage = files.nidFrontImage[0].filename;
+        }
+
+        if (files.nidBackImage?.[0]) {
+            userDocument.nidBackImage = files.nidBackImage[0].filename;
+        }
+
+        await this.userDocumentRepsitory.save(userDocument);
+
+        return { message: "Documents uploaded successfully" };
+    }
+
+    async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
+        const user = await this.userRepository.findOne({
+            where: { email: dto.email },
+        });
+
+        if (!user) {
+            throw new NotFoundException("User not found with this email");
+        }
+
+        // Generate verification code
+        const verificationCode = this.generateVerificationCode();
+
+        // Create email verification record
+        const emailVerification = this.emailVerificationRepository.create({
+            user: user,
+            email: dto.email,
+            verificationCode: verificationCode,
+            expiredAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+            isUsed: false,
+        });
+
+        await this.emailVerificationRepository.save(emailVerification);
+
+        // Send email with OTP
+        await this.emailService.sendEmailVerification(
+            dto.email,
+            verificationCode,
+        );
+
+        return { message: "Password reset code sent to your email" };
+    }
+
+    async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+        const user = await this.userRepository.findOne({
+            where: { email: dto.email },
+        });
+
+        if (!user) {
+            throw new NotFoundException("User not found");
+        }
+
+        // Find the latest verification record
+        const emailVerification =
+            await this.emailVerificationRepository.findOne({
+                where: { email: dto.email },
+                order: { createdAt: "DESC" },
+            });
+
+        if (!emailVerification) {
+            throw new NotFoundException(
+                "No verification code found for this email",
+            );
+        }
+
+        if (emailVerification.isUsed) {
+            throw new BadRequestException(
+                "Verification code has already been used",
+            );
+        }
+
+        if (emailVerification.expiredAt < new Date()) {
+            throw new BadRequestException(
+                "Verification code has expired",
+            );
+        }
+
+        if (emailVerification.verificationCode !== dto.verificationCode) {
+            throw new BadRequestException("Invalid verification code");
+        }
+
+        // Mark as used
+        emailVerification.isUsed = true;
+        await this.emailVerificationRepository.save(emailVerification);
+
+        // Update password
+        user.password = await this.hasedPassword(dto.newPassword);
+        await this.userRepository.save(user);
+
+        return { message: "Password reset successfully" };
+    }
 }
 

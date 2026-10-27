@@ -178,6 +178,86 @@ export class ProductService {
             );
         }
 
+        // -----------------------------------------------------
+        // Date window validation
+        // -----------------------------------------------------
+
+        const rentalStart =
+            createProductDto.rentalWindowStart
+                ? new Date(createProductDto.rentalWindowStart)
+                : null;
+        const rentalEnd =
+            createProductDto.rentalWindowEnd
+                ? new Date(createProductDto.rentalWindowEnd)
+                : null;
+        const deliveryStart =
+            createProductDto.deliveryWindowStart
+                ? new Date(createProductDto.deliveryWindowStart)
+                : null;
+        const deliveryEnd =
+            createProductDto.deliveryWindowEnd
+                ? new Date(createProductDto.deliveryWindowEnd)
+                : null;
+        const returnStart =
+            createProductDto.returnWindowStart
+                ? new Date(createProductDto.returnWindowStart)
+                : null;
+        const returnEnd =
+            createProductDto.returnWindowEnd
+                ? new Date(createProductDto.returnWindowEnd)
+                : null;
+
+        if (rentalStart && rentalEnd) {
+            if (rentalStart.getTime() >= rentalEnd.getTime()) {
+                throw new BadRequestException(
+                    "Rental window start must be before rental window end",
+                );
+            }
+        }
+
+        if (deliveryStart && deliveryEnd) {
+            if (deliveryStart.getTime() >= deliveryEnd.getTime()) {
+                throw new BadRequestException(
+                    "Delivery window start must be before delivery window end",
+                );
+            }
+        }
+
+        if (returnStart && returnEnd) {
+            if (returnStart.getTime() >= returnEnd.getTime()) {
+                throw new BadRequestException(
+                    "Return window start must be before return window end",
+                );
+            }
+        }
+
+        // Delivery window should end before rental window starts
+        if (deliveryEnd && rentalStart) {
+            if (deliveryEnd.getTime() > rentalStart.getTime()) {
+                throw new BadRequestException(
+                    "Delivery window end must be before rental window start",
+                );
+            }
+        }
+
+        // Rental window start must not be before delivery window start
+        if (deliveryStart && rentalStart) {
+            if (rentalStart.getTime() < deliveryStart.getTime()) {
+                throw new BadRequestException(
+                    "Rental window start must be on or after delivery-to-rider start time",
+                );
+            }
+        }
+
+        // Return window should start after rental window ends
+        if (rentalEnd && returnStart) {
+            if (returnStart.getTime() < rentalEnd.getTime()) {
+                throw new BadRequestException(
+                    "Return window start must be on or after rental window end",
+                );
+            }
+        }
+
 
         // -----------------------------------------------------
         // Product image validation
@@ -292,6 +372,74 @@ export class ProductService {
 
                         availabilityStatus:
                             ProductAvailabilityStatus.AVAILABLE,
+
+                        // Owner-chosen date windows
+                        rentalWindowStart:
+                            createProductDto.rentalWindowStart
+                                ? new Date(
+                                    createProductDto
+                                        .rentalWindowStart,
+                                )
+                                : null,
+
+                        rentalWindowEnd:
+                            createProductDto.rentalWindowEnd
+                                ? new Date(
+                                    createProductDto
+                                        .rentalWindowEnd,
+                                )
+                                : null,
+
+                        deliveryWindowStart:
+                            createProductDto
+                                .deliveryWindowStart
+                                ? new Date(
+                                    createProductDto
+                                        .deliveryWindowStart,
+                                )
+                                : null,
+
+                        deliveryWindowEnd:
+                            createProductDto
+                                .deliveryWindowEnd
+                                ? new Date(
+                                    createProductDto
+                                        .deliveryWindowEnd,
+                                )
+                                : null,
+
+                        returnWindowStart:
+                            createProductDto
+                                .returnWindowStart
+                                ? new Date(
+                                    createProductDto
+                                        .returnWindowStart,
+                                )
+                                : null,
+
+                        returnWindowEnd:
+                            createProductDto
+                                .returnWindowEnd
+                                ? new Date(
+                                    createProductDto
+                                        .returnWindowEnd,
+                                )
+                                : null,
+
+                        // Platform fee percentage per day
+                        platformFeePercentage:
+                            (
+                                createProductDto
+                                    .platformFeePercentage ??
+                                10
+                            ).toFixed(2),
+
+                        // Base delivery fee
+                        deliveryFeeBase:
+                            (
+                                createProductDto
+                                    .deliveryFeeBase ?? 0
+                            ).toFixed(2),
                     },
                 );
 

@@ -32,6 +32,7 @@ import {
     AssignHandoverRiderDto,
     EarlyReturnDecisionDto,
     ModeratorGateDto,
+    SubmitModeratorMediaDto,
     VerifyHandoverOtpDto,
 } from "./dto/handover.dto";
 
@@ -297,6 +298,136 @@ export class HandoverController {
             moderatorId,
             stage,
             dto.approved,
+            dto.note,
+        );
+    }
+
+    // =====================================================
+    // MODERATOR - SUBMIT WAREHOUSE MEDIA
+    // Upload inspection photos/videos for a warehouse
+    // gate checkpoint.
+    // =====================================================
+
+    @Post(":rentalId/stage/:stage/moderator-media")
+    @UseGuards(
+        JwtAuthGuard,
+        RolesGuard,
+    )
+    @Roles(
+        UserRole.MODERATOR,
+        UserRole.ADMIN,
+    )
+    @UseInterceptors(
+        FilesInterceptor("media", 7, {
+            storage: diskStorage({
+                destination: (
+                    request,
+                    file,
+                    callback,
+                ) => {
+                    const rentalId =
+                        (request.params as any)
+                            .rentalId ?? "unknown";
+
+                    const safeRentalId =
+                        String(rentalId).replace(
+                            /[^A-Za-z0-9_-]/g,
+                            "",
+                        );
+
+                    const directory = join(
+                        process.cwd(),
+                        "uploads",
+                        "handover",
+                        safeRentalId || "unknown",
+                    );
+
+                    try {
+                        mkdirSync(directory, {
+                            recursive: true,
+                        });
+
+                        callback(null, directory);
+                    } catch (error) {
+                        callback(
+                            error as Error,
+                            "",
+                        );
+                    }
+                },
+
+                filename: (
+                    request,
+                    file,
+                    callback,
+                ) => {
+                    const extension =
+                        extname(
+                            file.originalname,
+                        ).toLowerCase();
+
+                    callback(
+                        null,
+                        `${randomUUID()}${extension}`,
+                    );
+                },
+            }),
+
+            limits: {
+                fileSize: MAX_VIDEO_BYTES,
+                files: 7,
+            },
+
+            fileFilter: (
+                request,
+                file,
+                callback,
+            ) => {
+                if (
+                    !ALLOWED_MIMETYPES.includes(
+                        file.mimetype,
+                    )
+                ) {
+                    return callback(
+                        new BadRequestException(
+                            "Only JPEG/PNG/WebP photos and MP4 videos are allowed",
+                        ),
+                        false,
+                    );
+                }
+
+                callback(null, true);
+            },
+        }),
+    )
+    async submitModeratorMedia(
+        @Param("rentalId") rentalId: string,
+        @Param("stage") stage: HandoverStage,
+        @UploadedFiles()
+        files: Express.Multer.File[],
+        @Body() dto: SubmitModeratorMediaDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const moderatorId = req.user.userId;
+
+        const safeRentalId =
+            String(rentalId).replace(
+                /[^A-Za-z0-9_-]/g,
+                "",
+            );
+
+        const handoverFiles = (files ?? []).map(
+            (file) => ({
+                path: `/uploads/handover/${safeRentalId || "unknown"}/${file.filename}`,
+                mimetype: file.mimetype,
+            }),
+        );
+
+        return this.handoverService.submitModeratorMedia(
+            rentalId,
+            moderatorId,
+            stage,
+            handoverFiles,
             dto.note,
         );
     }

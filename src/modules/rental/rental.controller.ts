@@ -1,6 +1,7 @@
 import {
     Body,
     Controller,
+    Delete,
     Get,
     Param,
     Patch,
@@ -19,6 +20,8 @@ import { CreateRentalRequestDto } from './dto/create-rental-request.dto';
 import { CreateNegotiationOfferDto } from './dto/create-negotiation-offer.dto';
 import { UpdateNegotiationOfferDto } from './dto/update-negotiation-offer.dto';
 import { OwnerRentalRequestActionDto } from './dto/owner-rental-request-action.dto';
+import { RenterRentalRequestActionDto } from './dto/renter-rental-request-action.dto';
+import { AcceptChargesDto } from './dto/accept-charges.dto';
 import { ReviewRentalRequestDto } from './dto/ReviewRentalRequestDto';
 import { ReviewRentalChargePaymentDto } from './dto/rental-charge.dto';
 import {
@@ -206,6 +209,39 @@ async getOwnerRentalRequests(
     }
 
     // =====================================================
+    // RENTER - CONFIRM / REJECT AFTER OWNER ACCEPTANCE
+    // Renter confirms the agreed terms before moderator
+    // assigns a rider. Both parties must confirm.
+    // =====================================================
+
+    @Patch(':rentalRequestId/renter-action')
+    @UseGuards(
+        JwtAuthGuard,
+        RolesGuard,
+    )
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async renterRentalRequestAction(
+        @Param('rentalRequestId') rentalRequestId: string,
+        @Body() dto: RenterRentalRequestActionDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const renterId = req.user.userId;
+
+        return this.rentalService.renterRentalRequestAction(
+            rentalRequestId,
+            renterId,
+            dto.action,
+        );
+    }
+
+    // =====================================================
     // CREATE NEGOTIATION OFFER
     // =====================================================
 
@@ -312,6 +348,41 @@ async getOwnerRentalRequests(
         return this.rentalService.getModeratorRentalRequests(
             pagination,
         );
+    }
+
+    // =====================================================
+    // MODERATOR - DASHBOARD STATS
+    // =====================================================
+
+    @Get('moderator/dashboard')
+    @UseGuards(
+        JwtAuthGuard,
+        RolesGuard,
+    )
+    @Roles(
+        UserRole.ADMIN,
+        UserRole.MODERATOR,
+    )
+    async getModeratorDashboardStats() {
+        return this.rentalService.getModeratorDashboardStats();
+    }
+
+    // =====================================================
+    // MODERATOR - CLEANUP COMPLETED RENTALS (30 DAYS)
+    // Permanently deletes completed rentals older than 30 days.
+    // =====================================================
+
+    @Delete('moderator/cleanup-completed')
+    @UseGuards(
+        JwtAuthGuard,
+        RolesGuard,
+    )
+    @Roles(
+        UserRole.ADMIN,
+        UserRole.MODERATOR,
+    )
+    async cleanupCompletedRentals() {
+        return this.rentalService.cleanupCompletedRentals();
     }
 
     // =====================================================
@@ -580,6 +651,96 @@ async getOwnerRentalRequests(
             rentalRequestId,
             userId,
             userRole,
+        );
+    }
+
+    // =====================================================
+    // OWNER / RENTER - REJECT AFTER MODERATOR APPROVAL
+    // Either party can reject an APPROVED request before
+    // the moderator assigns a rider.
+    // =====================================================
+
+    @Patch(':rentalRequestId/reject-after-approval')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async rejectAfterApproval(
+        @Param('rentalRequestId') rentalRequestId: string,
+        @Body() dto: OwnerRentalRequestActionDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const userId = req.user.userId;
+
+        return this.rentalService.rejectAfterApproval(
+            rentalRequestId,
+            userId,
+            dto.action,
+        );
+    }
+
+    // =====================================================
+    // OWNER - ACCEPT / REJECT PROPOSED CHARGES
+    // Owner accepts or rejects the moderator's proposed
+    // charges before the request becomes APPROVED.
+    // =====================================================
+
+    @Patch(':rentalRequestId/owner-charges')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async ownerAcceptCharges(
+        @Param('rentalRequestId') rentalRequestId: string,
+        @Body() dto: AcceptChargesDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const ownerId = req.user.userId;
+
+        return this.rentalService.ownerAcceptCharges(
+            rentalRequestId,
+            ownerId,
+            dto.action,
+        );
+    }
+
+    // =====================================================
+    // RENTER - ACCEPT / REJECT PROPOSED CHARGES
+    // Renter accepts or rejects the moderator's proposed
+    // charges before the request becomes APPROVED.
+    // =====================================================
+
+    @Patch(':rentalRequestId/renter-charges')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async renterAcceptCharges(
+        @Param('rentalRequestId') rentalRequestId: string,
+        @Body() dto: AcceptChargesDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const renterId = req.user.userId;
+
+        return this.rentalService.renterAcceptCharges(
+            rentalRequestId,
+            renterId,
+            dto.action,
         );
     }
 

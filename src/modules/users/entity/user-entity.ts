@@ -58,6 +58,27 @@ export class User
   password!: string;
 
   @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  address?: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
+  latitude?: string | null;
+
+  @Column({
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+  })
+  longitude?: string | null;
+
+  @Column({
     type: 'enum',
     enum: UserRole,
   })

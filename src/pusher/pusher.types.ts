@@ -7,6 +7,10 @@ export interface PusherNotificationData
     userName: string;
     email: string;
     timestamp: Date;
+
+    // Optional rental context for deep-linking from the frontend.
+    rentalId?: string | null;
+    link?: string | null;
 }
 export enum PusherNotificationType
  {

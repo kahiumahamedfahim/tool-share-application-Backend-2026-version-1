@@ -10,6 +10,7 @@ import {
 
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
+import { Patch } from '@nestjs/common';
 
 import { UserService } from './user-service';
 import { CreateAdminDto } from './dto/create-admin.dto';
@@ -29,8 +30,13 @@ import { Query } from '@nestjs/common';
 import { PaginationDto } from '../pagination/pagination-dto';
 import { RejectUserDocumentDto } from './dto/reject-user-document.dto';
 import { CreateRiderDto } from '../users/dto/create-rider-dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/forgot-password.dto';
 import { ValidationPipe } from '@nestjs/common';
 import { UsePipes } from '@nestjs/common';
+import { ToggleUserStatusDto } from './dto/toggle-user-status.dto';
+import { UpdateMyProfileDto } from './dto/update-my-profile.dto';
+import { UpdateMyPasswordDto } from './dto/update-my-password.dto';
 
 @Controller('users')
 export class UserController{
@@ -123,6 +129,22 @@ export class UserController{
     @Body() dto: ResendVerificationCodeDto,
   ) {
     return await this.userService.resendVerificationCode(dto);
+  }
+
+  @Post('forgot-password')
+  @UsePipes(new ValidationPipe())
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+  ) {
+    return await this.userService.forgotPassword(dto);
+  }
+
+  @Post('reset-password')
+  @UsePipes(new ValidationPipe())
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+  ) {
+    return await this.userService.resetPassword(dto);
   }
 
    @Get('documents')
@@ -464,6 +486,142 @@ async allUserPendingDocuments(
 {
     return await this.userService.allUsersPendingDocuments(
         paginationDto,
+    );
+}
+
+@Get('all')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+async getAllUsers(
+    @Query() paginationDto: PaginationDto,
+) {
+    return await this.userService.getAllUsers(paginationDto);
+}
+
+@Patch(':userId/status')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+@UsePipes(new ValidationPipe())
+async toggleUserStatus(
+    @Param('userId') userId: string,
+    @Body() dto: ToggleUserStatusDto,
+    @Req() request: AuthenticatedRequest,
+) {
+    return await this.userService.toggleUserStatus(
+        userId,
+        request.user.userId,
+        request.user.role,
+        dto.status,
+    );
+}
+
+@Get('rental-logs')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.MODERATOR)
+async getAllRentalLogs(
+    @Query() paginationDto: PaginationDto,
+) {
+    return await this.userService.getAllRentalLogs(paginationDto);
+}
+
+@Get('me')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.USER, UserRole.RIDER, UserRole.MODERATOR, UserRole.ADMIN)
+async getMyProfile(
+    @Req() req: AuthenticatedRequest,
+) {
+    return await this.userService.getMyProfile(req.user.userId);
+}
+
+@Patch('me')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.USER, UserRole.RIDER, UserRole.MODERATOR, UserRole.ADMIN)
+@UsePipes(new ValidationPipe())
+async updateMyProfile(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: UpdateMyProfileDto,
+) {
+    return await this.userService.updateMyProfile(
+        req.user.userId,
+        dto,
+    );
+}
+
+@Patch('me/password')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.USER, UserRole.RIDER, UserRole.MODERATOR, UserRole.ADMIN)
+@UsePipes(new ValidationPipe())
+async updateMyPassword(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: UpdateMyPasswordDto,
+) {
+    return await this.userService.updateMyPassword(
+        req.user.userId,
+        dto,
+    );
+}
+
+@Get('me/document')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.USER, UserRole.RIDER, UserRole.MODERATOR, UserRole.ADMIN)
+async getMyDocument(
+    @Req() req: AuthenticatedRequest,
+) {
+    return await this.userService.getUserDocumentById(req.user.userId);
+}
+
+@Post('me/document')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.USER, UserRole.RIDER, UserRole.MODERATOR, UserRole.ADMIN)
+@UseInterceptors(
+    FileFieldsInterceptor(
+        [
+            {
+                name: 'profileImage',
+                maxCount: 1,
+            },
+            {
+                name: 'nidFrontImage',
+                maxCount: 1,
+            },
+            {
+                name: 'nidBackImage',
+                maxCount: 1,
+            },
+        ],
+        {
+            storage: diskStorage({
+                destination: (req, file, callback) => {
+                    let folder = './uploads';
+                    if (file.fieldname === 'profileImage') {
+                        folder = './uploads/profile';
+                    } else if (file.fieldname === 'nidFrontImage') {
+                        folder = './uploads/nid-front';
+                    } else if (file.fieldname === 'nidBackImage') {
+                        folder = './uploads/nid-back';
+                    }
+                    callback(null, folder);
+                },
+                filename: (req, file, callback) => {
+                    const uniqueName = `${Date.now()}-${file.originalname}`;
+                    callback(null, uniqueName);
+                },
+            }),
+        },
+    ),
+)
+async uploadMyDocument(
+    @Req() req: AuthenticatedRequest,
+    @UploadedFiles()
+    files: {
+        profileImage?: Express.Multer.File[];
+        nidFrontImage?: Express.Multer.File[];
+        nidBackImage?: Express.Multer.File[];
+    },
+) {
+    return await this.userService.uploadMyDocument(
+        req.user.userId,
+        files,
     );
 }
 

@@ -217,6 +217,21 @@ deliveryLongitude!: number;
     })
     platformCommissionRate?: string;
 
+    // Charge acceptance flags — both owner and renter
+    // must accept the moderator's proposed charges
+    // before the request becomes APPROVED.
+    @Column({
+        type: "boolean",
+        default: false,
+    })
+    ownerChargesAccepted!: boolean;
+
+    @Column({
+        type: "boolean",
+        default: false,
+    })
+    renterChargesAccepted!: boolean;
+
     // Rider assigned by the moderator
     // during review (optional).
     @Column({

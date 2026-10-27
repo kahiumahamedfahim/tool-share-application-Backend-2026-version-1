@@ -42,7 +42,11 @@ import {
     RentalChargeType,
 } from "./entity/rental-charge.entity";
 import { HandoverRiderAssignment } from "./entity/handover-rider-assignment.entity";
-import { HandoverCheckpoint } from "./entity/handover-checkpoint.entity";
+import {
+    CheckpointMedia,
+    HandoverCheckpoint,
+} from "./entity/handover-checkpoint.entity";
+import { HandoverOtp } from "./entity/handover-otp.entity";
 import {
     HandoverCheckpointStatus,
     HandoverStage,
@@ -68,6 +72,12 @@ import {
 import {
     OwnerRentalRequestAction,
 } from "./dto/owner-rental-request-action.dto";
+import {
+    RenterRentalRequestAction,
+} from "./dto/renter-rental-request-action.dto";
+import {
+    ChargesAction,
+} from "./dto/accept-charges.dto";
 import {
     ModeratorPickupReviewDto,
     ModeratorReturnReviewDto,
@@ -308,6 +318,8 @@ export class RentalService {
         title: string,
         message: string,
         actor?: User | null,
+        rentalId?: string | null,
+        link?: string | null,
     ): PusherNotificationData {
         return {
             type,
@@ -319,6 +331,8 @@ export class RentalService {
                 : "ToolShare",
             email: actor?.email ?? "",
             timestamp: new Date(),
+            rentalId: rentalId ?? null,
+            link: link ?? null,
         };
     }
 
@@ -666,6 +680,8 @@ export class RentalService {
                 "New Rental Request",
                 `A renter has requested to rent "${product.name}".`,
                 renter,
+                savedRequest.rentalRequestId,
+                `/rentals/request/${savedRequest.rentalRequestId}`,
             );
 
         await this.notify(
@@ -913,12 +929,28 @@ export class RentalService {
         const updatedRequest =
             await this.rentalRequestRepository.save(request);
 
+        const isAccepted =
+            action === OwnerRentalRequestAction.ACCEPT;
+
+        // -------------------------------------------------
+        // Auto-cancel other active requests for the same
+        // product. An owner can only accept one request
+        // per product; every other open request from any
+        // other renter is rejected automatically.
+        // -------------------------------------------------
+
+        if (isAccepted) {
+            await this.cancelOtherRequestsForProduct(
+                request.productId,
+                request.rentalRequestId,
+                product?.name ?? "the product",
+                owner,
+            );
+        }
+
         // -------------------------------------------------
         // Notifications
         // -------------------------------------------------
-
-        const isAccepted =
-            action === OwnerRentalRequestAction.ACCEPT;
 
         const notification =
             this.buildNotification(
@@ -956,6 +988,621 @@ export class RentalService {
             ownerId,
             UserRole.USER,
         );
+    }
+
+    // =====================================================
+    // OWNER / RENTER - REJECT AFTER MODERATOR APPROVAL
+    // Either party can reject an APPROVED request before
+    // the moderator assigns a rider.
+    // =====================================================
+
+    async rejectAfterApproval(
+        rentalRequestId: string,
+        userId: string,
+        action: OwnerRentalRequestAction,
+    ): Promise<ReturnType<RentalService["shapeRequest"]>> {
+
+        if (action !== OwnerRentalRequestAction.REJECT) {
+            throw new BadRequestException(
+                "Only rejection is allowed after moderator approval",
+            );
+        }
+
+        const request =
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            });
+
+        if (!request) {
+            throw new NotFoundException(
+                "Rental request not found",
+            );
+        }
+
+        // Only the owner or the renter can reject
+        if (
+            request.ownerId !== userId &&
+            request.renterId !== userId
+        ) {
+            throw new ForbiddenException(
+                "Only the owner or the renter can reject this request",
+            );
+        }
+
+        if (request.status !== RentalRequestStatus.APPROVED) {
+            throw new BadRequestException(
+                "Only approved requests can be rejected after moderator approval",
+            );
+        }
+
+        // Cannot reject if a rider is already assigned
+        if (request.riderId) {
+            throw new BadRequestException(
+                "Cannot reject: a rider has already been assigned to this rental",
+            );
+        }
+
+        request.status = RentalRequestStatus.REJECTED;
+
+        const updatedRequest =
+            await this.rentalRequestRepository.save(request);
+
+        const user =
+            await this.userRepository.findOne({
+                where: { userId },
+            });
+
+        const product =
+            await this.productRepository.findOne({
+                where: { productId: request.productId },
+            });
+
+        const counterpartyId =
+            request.ownerId === userId
+                ? request.renterId
+                : request.ownerId;
+
+        const counterparty =
+            await this.userRepository.findOne({
+                where: { userId: counterpartyId },
+            });
+
+        const actorName =
+            user
+                ? `${user.firstName} ${user.lastName}`.trim()
+                : "A party";
+
+        const counterpartyName =
+            counterparty
+                ? `${counterparty.firstName} ${counterparty.lastName}`.trim()
+                : "";
+
+        // Notify both parties
+        const notification =
+            this.buildNotification(
+                PusherNotificationType.RENTAL_REQUEST_REJECTED,
+                "Rental Request Rejected",
+                `${actorName} (${user?.role}) rejected the approved rental for "${product?.name ?? "the product"}".`,
+                user,
+                request.rentalRequestId,
+                `/rentals/request/${request.rentalRequestId}`,
+            );
+
+        await this.notify(
+            [
+                PUSHER_CHANNELS.OWNER(request.ownerId),
+                PUSHER_CHANNELS.RENTER(request.renterId),
+                PUSHER_CHANNELS.ADMIN_MODERATOR,
+            ],
+            PUSHER_EVENTS.RENTAL_REQUEST_REJECTED,
+            notification,
+        );
+
+        return this.shapeRequest(
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            }) ?? updatedRequest,
+            userId,
+            UserRole.USER,
+        );
+    }
+
+    // =====================================================
+    // OWNER - ACCEPT / REJECT PROPOSED CHARGES
+    // Owner accepts or rejects moderator's proposed
+    // charges. When both parties accept, status becomes
+    // APPROVED and moderator is notified to assign rider.
+    // =====================================================
+
+    async ownerAcceptCharges(
+        rentalRequestId: string,
+        ownerId: string,
+        action: ChargesAction,
+    ): Promise<ReturnType<RentalService["shapeRequest"]>> {
+
+        return this.handleChargeAcceptance(
+            rentalRequestId,
+            ownerId,
+            action,
+            "owner",
+        );
+    }
+
+    // =====================================================
+    // RENTER - ACCEPT / REJECT PROPOSED CHARGES
+    // Renter accepts or rejects moderator's proposed
+    // charges. When both parties accept, status becomes
+    // APPROVED and moderator is notified to assign rider.
+    // =====================================================
+
+    async renterAcceptCharges(
+        rentalRequestId: string,
+        renterId: string,
+        action: ChargesAction,
+    ): Promise<ReturnType<RentalService["shapeRequest"]>> {
+
+        return this.handleChargeAcceptance(
+            rentalRequestId,
+            renterId,
+            action,
+            "renter",
+        );
+    }
+
+    // =====================================================
+    // INTERNAL - HANDLE CHARGE ACCEPTANCE
+    // =====================================================
+
+    private async handleChargeAcceptance(
+        rentalRequestId: string,
+        userId: string,
+        action: ChargesAction,
+        party: "owner" | "renter",
+    ): Promise<ReturnType<RentalService["shapeRequest"]>> {
+
+        const request =
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            });
+
+        if (!request) {
+            throw new NotFoundException(
+                "Rental request not found",
+            );
+        }
+
+        // Only CHARGES_PROPOSED requests can be accepted/rejected
+        if (request.status !== RentalRequestStatus.CHARGES_PROPOSED) {
+            throw new BadRequestException(
+                "Charges are not proposed for this request yet",
+            );
+        }
+
+        // Verify the caller is the correct party
+        if (
+            party === "owner" &&
+            request.ownerId !== userId
+        ) {
+            throw new ForbiddenException(
+                "Only the owner can accept or reject these charges",
+            );
+        }
+
+        if (
+            party === "renter" &&
+            request.renterId !== userId
+        ) {
+            throw new ForbiddenException(
+                "Only the renter can accept or reject these charges",
+            );
+        }
+
+        const user =
+            await this.userRepository.findOne({
+                where: { userId },
+            });
+
+        const product =
+            await this.productRepository.findOne({
+                where: { productId: request.productId },
+            });
+
+        const counterpartyId =
+            party === "owner"
+                ? request.renterId
+                : request.ownerId;
+
+        const counterparty =
+            await this.userRepository.findOne({
+                where: { userId: counterpartyId },
+            });
+
+        if (action === ChargesAction.ACCEPT) {
+            // Mark this party's acceptance
+            if (party === "owner") {
+                request.ownerChargesAccepted = true;
+            } else {
+                request.renterChargesAccepted = true;
+            }
+
+            // If both parties accepted, set status to APPROVED
+            if (
+                request.ownerChargesAccepted &&
+                request.renterChargesAccepted
+            ) {
+                request.status = RentalRequestStatus.APPROVED;
+
+                // Notify moderator that both parties accepted charges
+                const moderator =
+                    request.moderatorId
+                        ? await this.userRepository.findOne({
+                            where: { userId: request.moderatorId },
+                        })
+                        : null;
+
+                const bothAcceptedNotification =
+                    this.buildNotification(
+                        PusherNotificationType.NEW_RENTAL_REQUEST,
+                        "Charges Accepted by Both Parties",
+                        `Both owner and renter accepted the proposed charges for "${product?.name ?? "the product"}". Please assign a rider.`,
+                        user,
+                        request.rentalRequestId,
+                        `/rentals/request/${request.rentalRequestId}`,
+                    );
+
+                await this.notify(
+                    [
+                        PUSHER_CHANNELS.ADMIN_MODERATOR,
+                    ],
+                    PUSHER_EVENTS.NEW_RENTAL_REQUEST,
+                    bothAcceptedNotification,
+                );
+
+                // Notify both parties
+                const acceptedNotification =
+                    this.buildNotification(
+                        PusherNotificationType.RENTAL_REQUEST_ACCEPTED,
+                        "Charges Accepted",
+                        `Both parties accepted the charges. The moderator will now assign a rider.`,
+                        user,
+                        request.rentalRequestId,
+                        `/rentals/request/${request.rentalRequestId}`,
+                    );
+
+                await this.notify(
+                    [
+                        PUSHER_CHANNELS.OWNER(request.ownerId),
+                        PUSHER_CHANNELS.RENTER(request.renterId),
+                    ],
+                    PUSHER_EVENTS.RENTAL_REQUEST_ACCEPTED,
+                    acceptedNotification,
+                );
+            } else {
+                // Only one party accepted — notify the other party
+                const oneAcceptedNotification =
+                    this.buildNotification(
+                        PusherNotificationType.RENTAL_REQUEST_ACCEPTED,
+                        `${party === "owner" ? "Owner" : "Renter"} Accepted Charges`,
+                        `${user?.firstName ?? "A party"} accepted the proposed charges. Waiting for the other party to accept.`,
+                        user,
+                        request.rentalRequestId,
+                        `/rentals/request/${request.rentalRequestId}`,
+                    );
+
+                await this.notify(
+                    [
+                        party === "owner"
+                            ? PUSHER_CHANNELS.RENTER(request.renterId)
+                            : PUSHER_CHANNELS.OWNER(request.ownerId),
+                    ],
+                    PUSHER_EVENTS.RENTAL_REQUEST_ACCEPTED,
+                    oneAcceptedNotification,
+                );
+            }
+        } else {
+            // REJECT — reset acceptance flags and set status to REJECTED
+            request.ownerChargesAccepted = false;
+            request.renterChargesAccepted = false;
+            request.status = RentalRequestStatus.REJECTED;
+
+            // Notify both parties and moderator
+            const rejectedNotification =
+                this.buildNotification(
+                    PusherNotificationType.RENTAL_REQUEST_REJECTED,
+                    "Charges Rejected",
+                    `${user?.firstName ?? "A party"} rejected the proposed charges for "${product?.name ?? "the product"}".`,
+                    user,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
+                );
+
+            await this.notify(
+                [
+                    PUSHER_CHANNELS.OWNER(request.ownerId),
+                    PUSHER_CHANNELS.RENTER(request.renterId),
+                    PUSHER_CHANNELS.ADMIN_MODERATOR,
+                ],
+                PUSHER_EVENTS.RENTAL_REQUEST_REJECTED,
+                rejectedNotification,
+            );
+        }
+
+        const updatedRequest =
+            await this.rentalRequestRepository.save(request);
+
+        return this.shapeRequest(
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            }) ?? updatedRequest,
+            userId,
+            UserRole.USER,
+        );
+    }
+
+    // =====================================================
+    // RENTER - CONFIRM / REJECT AFTER OWNER ACCEPTANCE
+    // Renter confirms the agreed terms before moderator
+    // assigns a rider. Both parties must confirm.
+    // =====================================================
+
+    async renterRentalRequestAction(
+        rentalRequestId: string,
+        renterId: string,
+        action: RenterRentalRequestAction,
+    ): Promise<ReturnType<RentalService["shapeRequest"]>> {
+
+        const request =
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            });
+
+        if (!request) {
+            throw new NotFoundException(
+                "Rental request not found",
+            );
+        }
+
+        // Only the renter can confirm/reject
+        if (request.renterId !== renterId) {
+            throw new ForbiddenException(
+                "Only the renter can confirm or reject this request",
+            );
+        }
+
+        // Request must be PRICE_AGREED (owner already accepted)
+        if (request.status !== RentalRequestStatus.PRICE_AGREED) {
+            throw new BadRequestException(
+                "This request is not in price-agreed state. Owner must accept first.",
+            );
+        }
+
+        const renter =
+            await this.userRepository.findOne({
+                where: { userId: renterId },
+            });
+
+        const owner =
+            await this.userRepository.findOne({
+                where: { userId: request.ownerId },
+            });
+
+        const product =
+            await this.productRepository.findOne({
+                where: { productId: request.productId },
+            });
+
+        if (action === RenterRentalRequestAction.CONFIRM) {
+            request.status = RentalRequestStatus.RENTAL_CONFIRMED;
+
+            // -------------------------------------------------
+            // Notify moderator that both parties confirmed
+            // and rider assignment is needed
+            // -------------------------------------------------
+
+            const moderatorNotification =
+                this.buildNotification(
+                    PusherNotificationType.NEW_RENTAL_REQUEST,
+                    "Rental Ready for Rider Assignment",
+                    `Both owner and renter confirmed "${product?.name ?? "the product"}". Please assign a rider.`,
+                    renter,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
+                );
+
+            await this.notify(
+                [
+                    PUSHER_CHANNELS.ADMIN_MODERATOR,
+                ],
+                PUSHER_EVENTS.NEW_RENTAL_REQUEST,
+                moderatorNotification,
+            );
+
+            // Notify owner that renter confirmed
+            const ownerNotification =
+                this.buildNotification(
+                    PusherNotificationType.RENTAL_REQUEST_ACCEPTED,
+                    "Renter Confirmed",
+                    `The renter confirmed your rental request for "${product?.name ?? "the product"}". Waiting for moderator to assign a rider.`,
+                    renter,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
+                );
+
+            await this.notify(
+                [
+                    PUSHER_CHANNELS.OWNER(request.ownerId),
+                ],
+                PUSHER_EVENTS.RENTAL_REQUEST_ACCEPTED,
+                ownerNotification,
+            );
+
+        } else {
+            // REJECT
+            request.status = RentalRequestStatus.REJECTED;
+
+            // Notify both parties
+            const notification =
+                this.buildNotification(
+                    PusherNotificationType.RENTAL_REQUEST_REJECTED,
+                    "Rental Request Rejected",
+                    `The renter rejected the agreed terms for "${product?.name ?? "the product"}".`,
+                    renter,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
+                );
+
+            await this.notify(
+                [
+                    PUSHER_CHANNELS.OWNER(request.ownerId),
+                    PUSHER_CHANNELS.RENTER(request.renterId),
+                    PUSHER_CHANNELS.ADMIN_MODERATOR,
+                ],
+                PUSHER_EVENTS.RENTAL_REQUEST_REJECTED,
+                notification,
+            );
+        }
+
+        const updatedRequest =
+            await this.rentalRequestRepository.save(request);
+
+        return this.shapeRequest(
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+                relations: {
+                    product: { location: true },
+                    renter: true,
+                    owner: true,
+                    moderator: true,
+                    rider: true,
+                },
+            }) ?? updatedRequest,
+            renterId,
+            UserRole.USER,
+        );
+    }
+
+    // =====================================================
+    // AUTO-CANCEL OTHER ACTIVE REQUESTS FOR PRODUCT
+    // Rejects every open request for the same product
+    // except the accepted one, and notifies those renters.
+    // =====================================================
+
+    private async cancelOtherRequestsForProduct(
+        productId: string,
+        acceptedRentalRequestId: string,
+        productName: string,
+        owner: User | null,
+    ): Promise<void> {
+
+        /*
+         * Fetch all open requests for the product and
+         * filter out the accepted one in memory.
+         */
+
+        const allOpen =
+            await this.rentalRequestRepository.find({
+                where: {
+                    productId,
+                    status:
+                        ACTIVE_REQUEST_STATUSES as unknown as RentalRequestStatus,
+                },
+                relations: { renter: true },
+            });
+
+        const toCancel =
+            allOpen.filter(
+                (req) =>
+                    req.rentalRequestId !==
+                    acceptedRentalRequestId,
+            );
+
+        if (toCancel.length === 0) {
+            return;
+        }
+
+        for (const req of toCancel) {
+            req.status = RentalRequestStatus.REJECTED;
+
+            await this.negotiationOfferRepository.update(
+                {
+                    rentalRequestId:
+                        req.rentalRequestId,
+                    status:
+                        NegotiationOfferStatus.PENDING,
+                },
+                { status: NegotiationOfferStatus.REJECTED },
+            );
+
+            await this.rentalRequestRepository.save(req);
+        }
+
+        // -------------------------------------------------
+        // Notify each affected renter
+        // -------------------------------------------------
+
+        for (const req of toCancel) {
+            const renter =
+                await this.userRepository.findOne({
+                    where: { userId: req.renterId },
+                });
+
+            if (!renter) {
+                continue;
+            }
+
+            const notification =
+                this.buildNotification(
+                    PusherNotificationType.RENTAL_REQUEST_REJECTED,
+                    "Rental Request Cancelled",
+                    `The owner accepted another rental request for "${productName}", so your request for that product has been automatically cancelled.`,
+                    owner,
+                    req.rentalRequestId,
+                    `/rentals/request/${req.rentalRequestId}`,
+                );
+
+            await this.notify(
+                [
+                    PUSHER_CHANNELS.RENTER(req.renterId),
+                ],
+                PUSHER_EVENTS.RENTAL_REQUEST_REJECTED,
+                notification,
+            );
+        }
     }
 
     // =====================================================
@@ -1374,6 +2021,183 @@ export class RentalService {
     }
 
     // =====================================================
+    // MODERATOR - DASHBOARD STATS
+    // =====================================================
+
+    async getModeratorDashboardStats(): Promise<{
+        totalRentals: number;
+        activeRentals: number;
+        pendingHandoverRentals: number;
+        completedRentals: number;
+        pendingReviews: number;
+    }> {
+
+        const [
+            totalRentals,
+            activeRentals,
+            pendingHandoverRentals,
+            completedRentals,
+            pendingReviews,
+        ] = await Promise.all([
+            this.actualRentalRepository.count(),
+            this.actualRentalRepository.count({
+                where: { status: ActualRentalStatus.ACTIVE },
+            }),
+            this.actualRentalRepository.count({
+                where: { status: ActualRentalStatus.PENDING_HANDOVER },
+            }),
+            this.actualRentalRepository.count({
+                where: { status: ActualRentalStatus.COMPLETED },
+            }),
+            this.rentalRequestRepository.count({
+                where: { status: RentalRequestStatus.PRICE_AGREED },
+            }),
+        ]);
+
+        return {
+            totalRentals,
+            activeRentals,
+            pendingHandoverRentals,
+            completedRentals,
+            pendingReviews,
+        };
+    }
+
+    // =====================================================
+    // MODERATOR - CLEANUP COMPLETED RENTALS (30 DAYS)
+    // Permanently deletes completed rentals older than 30 days.
+    // =====================================================
+
+    async cleanupCompletedRentals(): Promise<{
+        deletedRentals: number;
+        cutoffDate: Date;
+    }> {
+
+        const cutoffDate = new Date();
+        cutoffDate.setUTCDate(cutoffDate.getUTCDate() - 30);
+
+        // Find completed rentals older than 30 days
+        const oldRentals =
+            await this.actualRentalRepository.find({
+                where: {
+                    status: ActualRentalStatus.COMPLETED,
+                    updatedAt: {
+                        // TypeORM uses moreThan/lessThan operators
+                    } as any,
+                },
+            });
+
+        // Filter in-memory for precise date comparison
+        const toDelete = oldRentals.filter(
+            (rental) =>
+                rental.updatedAt.getTime() < cutoffDate.getTime(),
+        );
+
+        if (toDelete.length === 0) {
+            return {
+                deletedRentals: 0,
+                cutoffDate,
+            };
+        }
+
+        const rentalIds = toDelete.map((r) => r.rentalId);
+        const rentalRequestIds = toDelete.map(
+            (r) => r.rentalRequestId,
+        );
+
+        const queryRunner =
+            this.dataSource.createQueryRunner();
+
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+
+        try {
+            // Delete related records in dependency order
+            // 1. Checkpoint media
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(CheckpointMedia)
+                .where("checkpointId IN (SELECT checkpointId FROM handover_checkpoints WHERE rentalId IN (:...rentalIds))", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 2. Handover checkpoints
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(HandoverCheckpoint)
+                .where("rentalId IN (:...rentalIds)", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 3. Handover OTPs
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(HandoverOtp)
+                .where("rentalId IN (:...rentalIds)", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 4. Rental state history
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(RentalStateHistory)
+                .where("rentalId IN (:...rentalIds)", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 5. Rental payments
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(RentalPayment)
+                .where("rentalId IN (:...rentalIds)", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 6. Actual rentals
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(ActualRental)
+                .where("rentalId IN (:...rentalIds)", {
+                    rentalIds,
+                })
+                .execute();
+
+            // 7. Rental requests
+            await queryRunner.manager
+                .createQueryBuilder()
+                .delete()
+                .from(RentalRequest)
+                .where("rentalRequestId IN (:...rentalRequestIds)", {
+                    rentalRequestIds,
+                })
+                .execute();
+
+            await queryRunner.commitTransaction();
+
+            return {
+                deletedRentals: toDelete.length,
+                cutoffDate,
+            };
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            throw error;
+        } finally {
+            await queryRunner.release();
+        }
+    }
+
+    // =====================================================
     // MODERATOR - APPROVE / REJECT REQUEST
     // =====================================================
 
@@ -1395,10 +2219,10 @@ export class RentalService {
         }
 
         if (
-            request.status !== RentalRequestStatus.PRICE_AGREED
+            request.status !== RentalRequestStatus.RENTAL_CONFIRMED
         ) {
             throw new BadRequestException(
-                "Only price-agreed requests can be reviewed",
+                "Only confirmed requests (owner accepted + renter confirmed) can be reviewed by moderator",
             );
         }
 
@@ -1501,7 +2325,7 @@ export class RentalService {
             }
 
             request.status =
-                RentalRequestStatus.APPROVED;
+                RentalRequestStatus.CHARGES_PROPOSED;
 
             request.ownerRentalFee = dto.ownerRentalFee!.toFixed(2);
             request.ownerDeliveryFee = dto.ownerDeliveryFee!.toFixed(2);
@@ -1517,6 +2341,10 @@ export class RentalService {
                     dto.platformCommissionRate ??
                     DEFAULT_PLATFORM_COMMISSION_RATE
                 ).toFixed(2);
+
+            // Reset charge acceptance flags — both parties must accept
+            request.ownerChargesAccepted = false;
+            request.renterChargesAccepted = false;
 
             request.riderId = dto.riderId ?? null;
         } else {
@@ -1670,10 +2498,14 @@ export class RentalService {
                     ? PusherNotificationType.RENTAL_REQUEST_ACCEPTED
                     : PusherNotificationType.RENTAL_REQUEST_REJECTED,
                 isApproved
-                    ? "Rental Request Approved"
+                    ? "Charges Proposed"
                     : "Rental Request Rejected",
-                `The moderator has ${isApproved ? "approved" : "rejected"} the rental request for "${product?.name ?? "the product"}".`,
+                isApproved
+                    ? `The moderator has proposed charges for "${product?.name ?? "the product"}". Please review and accept the rental fee, delivery charge, and platform commission.`
+                    : `The moderator has ${isApproved ? "approved" : "rejected"} the rental request for "${product?.name ?? "the product"}".`,
                 moderator,
+                request.rentalRequestId,
+                `/rentals/request/${request.rentalRequestId}`,
             );
 
         await this.notify(
@@ -2121,6 +2953,8 @@ export class RentalService {
                     "Rental Created",
                     `A rental for "${product?.name ?? "the product"}" is pending handover. Your renter charges total ৳${renterTotalPayable.toFixed(2)}.`,
                     moderator,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
                 ),
             );
 
@@ -2132,6 +2966,8 @@ export class RentalService {
                     "Rental Created",
                     `A rental for "${product?.name ?? "the product"}" is pending handover. Your owner charges total ৳${ownerTotalPayable.toFixed(2)}.`,
                     moderator,
+                    request.rentalRequestId,
+                    `/rentals/request/${request.rentalRequestId}`,
                 ),
             );
 
@@ -2153,6 +2989,8 @@ export class RentalService {
                     "Rental Created",
                     `Rental ${savedRental.rentalId} is pending handover.`,
                     moderator,
+                    savedRental.rentalRequestId,
+                    `/rentals/request/${savedRental.rentalRequestId}`,
                 ),
             );
 
@@ -2450,6 +3288,8 @@ export class RentalService {
                 "Cash Collected",
                 `The rider has collected the cash payment of ${payment.amount}.`,
                 actor,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
             );
 
         const channels: string[] = [
@@ -2540,6 +3380,8 @@ export class RentalService {
                 "Cash Delivered to Owner",
                 `The rider has delivered the cash payment of ${payment.amount}. Please confirm that you received it.`,
                 rider,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
             );
 
         await this.notify(
@@ -2636,6 +3478,8 @@ export class RentalService {
                 "Payment Confirmed",
                 `The owner confirmed receiving the cash payment of ${payment.amount}. The rental is now completed.`,
                 owner,
+                rental.rentalRequestId,
+                `/rentals/request/${rental.rentalRequestId}`,
             );
 
         const channels: string[] = [
