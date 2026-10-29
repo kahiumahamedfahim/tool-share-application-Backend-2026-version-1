@@ -430,7 +430,9 @@ export class ProductService {
                         platformFeePercentage: "10.00",
                         deliveryFeeBase: "0.00",
                         securityDeposit:
-                            createProductDto.securityDeposit.toFixed(2),
+                            createProductDto.securityDeposit
+                                ? createProductDto.securityDeposit.toFixed(2)
+                                : "0.00",
                     },
                 );
 

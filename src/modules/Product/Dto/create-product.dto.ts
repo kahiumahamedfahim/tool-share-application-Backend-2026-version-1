@@ -140,7 +140,8 @@ export class CreateProductDto {
     // =====================================================
 
     @Type(() => Number)
+    @IsOptional()
     @IsNumber({ maxDecimalPlaces: 2 })
     @Min(0)
-    securityDeposit!: number;
+    securityDeposit?: number;
 }
