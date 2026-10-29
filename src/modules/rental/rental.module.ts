@@ -17,6 +17,7 @@ import {
     HandoverCheckpoint,
 } from "./entity/handover-checkpoint.entity";
 import { HandoverOtp } from "./entity/handover-otp.entity";
+import { RentalIssue } from "./entity/rental-issue.entity";
 import { HandoverRiderAssignment } from "./entity/handover-rider-assignment.entity";
 
 import { Product } from "../Product/Entity/product.entity";
@@ -48,6 +49,7 @@ import { EmailModule } from "src/email/email.module";
             CheckpointMedia,
             HandoverOtp,
             HandoverRiderAssignment,
+            RentalIssue,
             Product,
             User,
         ]),

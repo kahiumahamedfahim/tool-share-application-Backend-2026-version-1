@@ -25,6 +25,11 @@ import { AcceptChargesDto } from './dto/accept-charges.dto';
 import { ReviewRentalRequestDto } from './dto/ReviewRentalRequestDto';
 import { ReviewRentalChargePaymentDto } from './dto/rental-charge.dto';
 import {
+    CreateIssueDto,
+    RespondToIssueDto,
+    DecideIssueDto,
+} from './dto/issue.dto';
+import {
     ModeratorPickupReviewDto,
     ModeratorReturnReviewDto,
 } from './dto/ReviewRentalRequestDto';
@@ -798,6 +803,100 @@ async getOwnerRentalRequests(
         return this.rentalService.reviewRentalChargeCollection(
             chargeId,
             req.user.userId,
+            dto,
+        );
+    }
+
+    // =====================================================
+    // ISSUE / DISPUTE WORKFLOW
+    // =====================================================
+
+    @Post('issues')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async createIssue(
+        @Body() dto: CreateIssueDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const userId = req.user.userId;
+
+        return this.rentalService.createIssue(
+            dto.rentalRequestId,
+            userId,
+            dto,
+        );
+    }
+
+    @Get('issues/request/:rentalRequestId')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER, UserRole.MODERATOR, UserRole.ADMIN)
+    async getIssuesForRequest(
+        @Param('rentalRequestId') rentalRequestId: string,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const userId = req.user.userId;
+        const userRole = req.user.role;
+
+        return this.rentalService.getIssuesForRequest(
+            rentalRequestId,
+            userId,
+            userRole,
+        );
+    }
+
+    @Post('issues/:issueId/respond')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.USER)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async respondToIssue(
+        @Param('issueId') issueId: string,
+        @Body() dto: RespondToIssueDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const userId = req.user.userId;
+
+        return this.rentalService.respondToIssue(
+            issueId,
+            userId,
+            dto,
+        );
+    }
+
+    @Patch('issues/:issueId/decide')
+    @UseGuards(JwtAuthGuard, RolesGuard)
+    @Roles(UserRole.MODERATOR, UserRole.ADMIN)
+    @UsePipes(
+        new ValidationPipe({
+            whitelist: true,
+            forbidNonWhitelisted: true,
+            transform: true,
+        }),
+    )
+    async decideIssue(
+        @Param('issueId') issueId: string,
+        @Body() dto: DecideIssueDto,
+        @Req() req: AuthenticatedRequest,
+    ) {
+        const userId = req.user.userId;
+        const userRole = req.user.role;
+
+        return this.rentalService.decideIssue(
+            issueId,
+            userId,
+            userRole,
             dto,
         );
     }

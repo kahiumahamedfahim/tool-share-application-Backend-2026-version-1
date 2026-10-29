@@ -27,6 +27,7 @@ import { RentalPayment, RentalPaymentStatus } from "./entity/rental-payment.enti
 import { RentalCharge, RentalChargeStatus } from "./entity/rental-charge.entity";
 import { HandoverCheckpoint, CheckpointMedia } from "./entity/handover-checkpoint.entity";
 import { HandoverOtp } from "./entity/handover-otp.entity";
+import { RentalIssue } from "./entity/rental-issue.entity";
 
 import { Product } from "../Product/Entity/product.entity";
 import { User } from "../users/entity/user-entity";
@@ -56,6 +57,15 @@ import {
     AssignHandoverRiderDto,
 } from "./dto/handover.dto";
 import { ReviewRentalChargePaymentDto } from "./dto/rental-charge.dto";
+import {
+    CreateIssueDto,
+    RespondToIssueDto,
+    DecideIssueDto,
+} from "./dto/issue.dto";
+import {
+    IssueSeverity,
+    IssueStatus,
+} from "./entity/rental-issue.entity";
 
 import { RentalRequestStatus } from "./enum/rental-request-status.enum";
 import {
@@ -135,6 +145,9 @@ export class RentalService {
 
         @InjectRepository(HandoverOtp)
         private readonly handoverOtpRepository: Repository<HandoverOtp>,
+
+        @InjectRepository(RentalIssue)
+        private readonly rentalIssueRepository: Repository<RentalIssue>,
 
         @InjectRepository(Product)
         private readonly productRepository: Repository<Product>,
@@ -2147,5 +2160,159 @@ export class RentalService {
         } finally {
             await queryRunner.release();
         }
+    }
+
+    // =====================================================
+    // ISSUE / DISPUTE WORKFLOW
+    // =====================================================
+
+    async createIssue(
+        rentalRequestId: string,
+        userId: string,
+        dto: CreateIssueDto,
+    ): Promise<RentalIssue> {
+        const request =
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+            });
+
+        if (!request) {
+            throw new NotFoundException("Rental request not found");
+        }
+
+        const isParticipant =
+            request.renterId === userId ||
+            request.ownerId === userId;
+
+        if (!isParticipant) {
+            throw new ForbiddenException(
+                "Only the owner or renter can raise an issue for this rental",
+            );
+        }
+
+        const issue =
+            this.rentalIssueRepository.create({
+                issueId: this.generateId("ISS"),
+                rentalId: "",
+                rentalRequestId,
+                raisedById: userId,
+                category: dto.category,
+                severity: dto.severity ?? IssueSeverity.MEDIUM,
+                title: dto.title,
+                description: dto.description ?? null,
+                evidenceReference: dto.evidenceReference ?? null,
+                status: IssueStatus.OPEN,
+            });
+
+        return this.rentalIssueRepository.save(issue);
+    }
+
+    async getIssuesForRequest(
+        rentalRequestId: string,
+        userId: string,
+        userRole: UserRole,
+    ): Promise<RentalIssue[]> {
+        const request =
+            await this.rentalRequestRepository.findOne({
+                where: { rentalRequestId },
+            });
+
+        if (!request) {
+            throw new NotFoundException("Rental request not found");
+        }
+
+        const isParticipant =
+            request.renterId === userId ||
+            request.ownerId === userId;
+
+        if (
+            !isParticipant &&
+            !this.isModeratorOrAdmin(userRole)
+        ) {
+            throw new ForbiddenException(
+                "You are not allowed to view issues for this rental",
+            );
+        }
+
+        return this.rentalIssueRepository.find({
+            where: { rentalRequestId },
+            order: { createdAt: "DESC" },
+        });
+    }
+
+    async respondToIssue(
+        issueId: string,
+        userId: string,
+        dto: RespondToIssueDto,
+    ): Promise<RentalIssue> {
+        const issue =
+            await this.rentalIssueRepository.findOne({
+                where: { issueId },
+            });
+
+        if (!issue) {
+            throw new NotFoundException("Issue not found");
+        }
+
+        if (issue.raisedById !== userId) {
+            throw new ForbiddenException(
+                "Only the user who raised the issue can respond to it",
+            );
+        }
+
+        if (issue.status !== IssueStatus.OPEN) {
+            throw new BadRequestException(
+                "This issue is no longer open for responses",
+            );
+        }
+
+        issue.description =
+            (issue.description ?? "") +
+            `\n\nResponse (${new Date().toISOString()}): ${dto.response}`;
+
+        if (dto.evidenceReference) {
+            issue.evidenceReference =
+                (issue.evidenceReference ?? "") +
+                `;${dto.evidenceReference}`;
+        }
+
+        return this.rentalIssueRepository.save(issue);
+    }
+
+    async decideIssue(
+        issueId: string,
+        userId: string,
+        userRole: UserRole,
+        dto: DecideIssueDto,
+    ): Promise<RentalIssue> {
+        const issue =
+            await this.rentalIssueRepository.findOne({
+                where: { issueId },
+            });
+
+        if (!issue) {
+            throw new NotFoundException("Issue not found");
+        }
+
+        if (!this.isModeratorOrAdmin(userRole)) {
+            throw new ForbiddenException(
+                "Only moderators or admins can decide on an issue",
+            );
+        }
+
+        issue.status = dto.status ?? IssueStatus.IN_REVIEW;
+        issue.resolution = dto.resolution;
+        issue.resolutionNote = dto.resolutionNote ?? null;
+        issue.resolutionAmount = dto.resolutionAmount
+            ? dto.resolutionAmount.toFixed(2)
+            : null;
+        issue.resolvedAt = new Date();
+        issue.resolvedById = userId;
+
+        if (dto.status === IssueStatus.RESOLVED) {
+            issue.status = IssueStatus.RESOLVED;
+        }
+
+        return this.rentalIssueRepository.save(issue);
     }
 }
