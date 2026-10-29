@@ -426,20 +426,9 @@ export class ProductService {
                                 )
                                 : null,
 
-                        // Platform fee percentage per day
-                        platformFeePercentage:
-                            (
-                                createProductDto
-                                    .platformFeePercentage ??
-                                10
-                            ).toFixed(2),
-
-                        // Base delivery fee
-                        deliveryFeeBase:
-                            (
-                                createProductDto
-                                    .deliveryFeeBase ?? 0
-                            ).toFixed(2),
+                        // Fees are assigned during moderator review, never by the owner.
+                        platformFeePercentage: "10.00",
+                        deliveryFeeBase: "0.00",
                     },
                 );
 

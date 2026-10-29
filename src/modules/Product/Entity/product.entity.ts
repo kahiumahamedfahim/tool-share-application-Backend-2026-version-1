@@ -155,9 +155,8 @@ export class Product {
     platformFeePercentage!: string;
 
     // =====================================================
-    // Delivery fee base (flat amount the owner sets;
-    // final amount may be adjusted by distance/size
-    // during moderator review).
+    // Delivery fee base is controlled by the platform and may
+    // be adjusted during moderator review.
     // =====================================================
 
     @Column({

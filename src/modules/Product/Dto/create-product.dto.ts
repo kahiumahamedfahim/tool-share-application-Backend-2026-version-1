@@ -101,21 +101,6 @@ export class CreateProductDto {
     @IsDateString()
     returnWindowEnd?: string;
 
-    // Platform fee percentage per day (default 10)
-    @IsOptional()
-    @Type(() => Number)
-    @IsNumber({ maxDecimalPlaces: 2 })
-    @Min(0)
-    @Max(100)
-    platformFeePercentage?: number;
-
-    // Base delivery fee (default 0)
-    @IsOptional()
-    @Type(() => Number)
-    @IsNumber({ maxDecimalPlaces: 2 })
-    @Min(0)
-    deliveryFeeBase?: number;
-
     // Pickup location
 
     @Type(() => Number)
