@@ -429,6 +429,8 @@ export class ProductService {
                         // Fees are assigned during moderator review, never by the owner.
                         platformFeePercentage: "10.00",
                         deliveryFeeBase: "0.00",
+                        securityDeposit:
+                            createProductDto.securityDeposit.toFixed(2),
                     },
                 );
 
@@ -685,6 +687,7 @@ async getProductById(
             maxRentalDays: product.maxRentalDays,
             preparationBufferDays: product.preparationBufferDays,
             allowSameDayRental: product.allowSameDayRental,
+            securityDeposit: product.securityDeposit,
             availabilityStatus: product.availabilityStatus,
             createdAt: product.createdAt,
             updatedAt: product.updatedAt,

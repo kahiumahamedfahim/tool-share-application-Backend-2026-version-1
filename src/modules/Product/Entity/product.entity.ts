@@ -167,6 +167,19 @@ export class Product {
     })
     deliveryFeeBase!: string;
 
+    // =====================================================
+    // Security deposit required from the renter
+    // before the product is handed over.
+    // =====================================================
+
+    @Column({
+        type: "decimal",
+        precision: 10,
+        scale: 2,
+        default: "0.00",
+    })
+    securityDeposit!: string;
+
     @Column({
         type: "enum",
         enum: ProductAvailabilityStatus,

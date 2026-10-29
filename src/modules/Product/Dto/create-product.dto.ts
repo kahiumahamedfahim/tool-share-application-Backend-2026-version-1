@@ -133,4 +133,14 @@ export class CreateProductDto {
     @IsString()
     @IsNotEmpty()
     pickupAddress!: string;
+
+    // =====================================================
+    // Security deposit required from the renter
+    // before the product is handed over.
+    // =====================================================
+
+    @Type(() => Number)
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0)
+    securityDeposit!: number;
 }
