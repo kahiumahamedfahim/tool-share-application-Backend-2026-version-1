@@ -278,6 +278,7 @@ export class ProductController
     // =========================================================
 
    @Get()
+   @UseGuards(OptionalJwtAuthGuard)
 
 async getAllProducts(
     @Req()
