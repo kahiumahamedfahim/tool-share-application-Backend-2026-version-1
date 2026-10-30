@@ -7,6 +7,8 @@ import {
 import {
     DataSource,
     EntityManager,
+    FindOptionsWhere,
+    ILike,
     Not,
     Repository,
 } from "typeorm";
@@ -591,6 +593,7 @@ export class ProductService {
         const {
             page,
             limit,
+            search,
         } = paginationDto;
 
 
@@ -598,17 +601,35 @@ export class ProductService {
             (page - 1) * limit;
 
 
+        // Build WHERE conditions. Array elements are OR'd; each object's
+        // properties are AND'd together.
+        const whereConditions: FindOptionsWhere<Product>[] = [];
+
+        if (search) {
+            const searchTerm = ILike(`%${search.trim()}%`);
+
+            if (ownerId) {
+                whereConditions.push(
+                    { ownerId: Not(ownerId), name: searchTerm },
+                    { ownerId: Not(ownerId), description: searchTerm },
+                );
+            } else {
+                whereConditions.push(
+                    { name: searchTerm },
+                    { description: searchTerm },
+                );
+            }
+        } else if (ownerId) {
+            whereConditions.push({ ownerId: Not(ownerId) });
+        }
+
         const [
             products,
             total,
         ] =
             await this.productRepository.findAndCount({
 
-                where: ownerId
-                    ? {
-                        ownerId: Not(ownerId),
-                    }
-                    : {},
+                where: whereConditions,
 
                 relations: {
                     category: true,
